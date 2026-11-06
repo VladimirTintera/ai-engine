@@ -16,25 +16,28 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * llama.cpp (modely GGUF, třeba EuroLLM) za rozhraním [LlmEngineFactory]. Jen text a jen CPU.
+ * llama.cpp (modely GGUF, třeba EuroLLM) za rozhraním [LlmEngineFactory]. Jen text.
  * Týž kód na Androidu i desktopu; liší se jen původ nativní knihovny ([LlamaNative.loadLibrary])
  * a počet vláken ([threads]).
  *
  * Vytváří se reflexí podle jména ([eu.tintera.plume.ai.engine.LLAMACPP_ENGINE_FACTORY]), proto
  * veřejný konstruktor bez parametrů.
  *
- * - **Jen CPU.** Aplikace o GPU nežádá (`ModelRuntime.gpu`): selhání GPU si pamatuje pro CELÝ
- *   proces (`gpuFailed` v `LiteRtOnDeviceAi`), takže pokus tady by Gemmě vzal GPU kvůli modelu,
- *   který GPU neumí. Backendy llama.cpp pro GPU (Vulkan, OpenCL) se nepřekládají.
+ * - **GPU jen přes Metal na Macu s Apple Silicon** — jinde se GPU backend nepřekládá a aplikace
+ *   o něj nežádá (`LiteRtPlatform.gpu`). Když přesto přijde [LlmBackend.Gpu] a build žádné GPU
+ *   nemá, [open] vyhodí dřív, než začne načítat, a aplikace načte CPU. Selhání GPU si aplikace
+ *   pamatuje pro každý runtime zvlášť (`gpuFailed` v `LiteRtOnDeviceAi`), takže Metal v llama.cpp
+ *   nevezme GPU Gemmě v LiteRT-LM.
  * - **Zvuk a obraz neumí** (engine s nimi se neotevře); EuroLLM je jen textový model.
  */
 class LlamaCppEngineFactory : LlmEngineFactory {
 
     override fun open(config: LlmEngineConfig): LlmEngine {
         require(!config.audio && !config.vision) { "llama.cpp runtime is text only" }
-        require(config.backend == LlmBackend.Cpu) { "llama.cpp runtime runs on the CPU only" }
         LlamaNative.ensureInitialized(File(config.cacheDir))
-        val handle = LlamaNative.load(config.modelPath.encodeToByteArray(), config.maxNumTokens, threads())
+        val gpu = config.backend == LlmBackend.Gpu
+        if (gpu && !LlamaNative.hasGpu()) throw IOException("llama.cpp has no GPU backend in this build")
+        val handle = LlamaNative.load(config.modelPath.encodeToByteArray(), config.maxNumTokens, threads(), gpu)
         if (handle == 0L) throw IOException("llama.cpp failed to load ${config.modelPath}")
         return LlamaCppEngine(handle)
     }
@@ -169,9 +172,13 @@ internal object LlamaNative {
     @JvmStatic
     private external fun init()
 
-    /** [path] jako bajty UTF-8, viz hlavička `plume_llama.cpp`. */
+    /** Má build GPU backend a našel zařízení (Metal na Macu)? Levné, nic nenačítá. */
     @JvmStatic
-    external fun load(path: ByteArray, contextTokens: Int, threads: Int): Long
+    external fun hasGpu(): Boolean
+
+    /** [path] jako bajty UTF-8, viz hlavička `plume_llama.cpp`; [gpu] = všechny vrstvy na GPU. */
+    @JvmStatic
+    external fun load(path: ByteArray, contextTokens: Int, threads: Int, gpu: Boolean): Long
 
     @JvmStatic
     external fun start(handle: Long, prompt: ByteArray, topK: Int, topP: Float, temperature: Float, maxTokens: Int): Int

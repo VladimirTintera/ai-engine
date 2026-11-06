@@ -37,24 +37,36 @@ class LlamaCppDesktopTest {
     fun modelAnswers() {
         val model = System.getProperty("llamaCppTestModel") ?: return
         check(bundled) { "Knihovna llama.cpp v jaru není" }
-        val started = System.nanoTime()
-        LlamaCppEngineFactory().open(config(model)).use { engine ->
-            val loaded = System.nanoTime()
-            val pieces = runBlocking {
-                engine.conversation(LlmSampling(topK = 40, topP = 0.95, temperature = 0.7))
-                    .send(listOf(LlmContent.Text("Ahoj 😊 Napiš jednou větou česky, co je Praha.")), maxOutputTokens = 64)
-                    .toList()
+        // GPU jen tam, kde ho build má (Metal na Macu s Apple Silicon); jinde ho factory odmítne.
+        val gpu = System.getProperty("os.name").lowercase().contains("mac") && System.getProperty("os.arch") == "aarch64"
+        for (backend in listOfNotNull(LlmBackend.Cpu, LlmBackend.Gpu.takeIf { gpu })) {
+            val started = System.nanoTime()
+            LlamaCppEngineFactory().open(config(model, backend)).use { engine ->
+                val loaded = System.nanoTime()
+                val pieces = runBlocking {
+                    engine.conversation(LlmSampling(topK = 40, topP = 0.95, temperature = 0.7))
+                        .send(listOf(LlmContent.Text("Ahoj 😊 Napiš jednou větou česky, co je Praha.")), maxOutputTokens = 64)
+                        .toList()
+                }
+                val answer = pieces.joinToString("")
+                val done = System.nanoTime()
+                println("$backend: načtení ${(loaded - started) / 1_000_000} ms, odpověď ${(done - loaded) / 1_000_000} ms, ${pieces.size} kusů: $answer")
+                assertTrue(answer.isNotBlank())
             }
-            val answer = pieces.joinToString("")
-            val done = System.nanoTime()
-            println("Načtení ${(loaded - started) / 1_000_000} ms, odpověď ${(done - loaded) / 1_000_000} ms, ${pieces.size} kusů: $answer")
-            assertTrue(answer.isNotBlank())
         }
     }
 
-    private fun config(model: String) = LlmEngineConfig(
+    @Test
+    fun gpuWithoutBackendFailsBeforeLoading() {
+        if (!bundled) return println("Knihovna llama.cpp v jaru není, test přeskočen.")
+        if (System.getProperty("os.name").lowercase().contains("mac") && System.getProperty("os.arch") == "aarch64") return
+        val error = assertFailsWith<IOException> { LlamaCppEngineFactory().open(config(File(cacheDir, "x.gguf").path, LlmBackend.Gpu)) }
+        assertTrue("GPU" in error.message.orEmpty())
+    }
+
+    private fun config(model: String, backend: LlmBackend = LlmBackend.Cpu) = LlmEngineConfig(
         modelPath = model,
-        backend = LlmBackend.Cpu,
+        backend = backend,
         audio = false,
         vision = false,
         maxNumTokens = 2_048,
