@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
 
 # Jedna knihovna `libplume_llama.so`: llama.cpp a ggml staticky, k tomu naše JNI (plume_llama.cpp).
+# Na Androidu ji staví AGP (externalNativeBuild v :client:ai-llamacpp), na desktopu úloha
+# `buildLlamaCppDesktop` (plugin `plume.llamacpp-desktop`) pro systém, na kterém se staví.
 #
 # Proč ne jako příklad `examples/llama.android`: ten staví backendy jako samostatné knihovny
 # (GGML_BACKEND_DL) a CPU variantu vybírá za běhu načtením z ADRESÁŘE nativních knihoven. Tahle
@@ -27,9 +29,20 @@ set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 # OpenMP by do součásti přidal sdílenou `libomp.so`, na kterou `libplume_llama.so` odkazuje.
 # V součásti doinstalované za běhu (SplitCompat) ji linker hledat nemusí — jmenný prostor
 # knihoven aplikace vznikl dřív než součást. ggml má vlastní pool vláken.
+# Na desktopu by navíc chtěla vlastní runtime (vcomp140.dll z VC++ Redistributable, libomp).
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# Jen CPU i na Macu: aplikace o GPU nežádá (`ModelRuntime.gpu`), viz LlamaCppEngineFactory.
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
 
-if(ANDROID_ABI STREQUAL "arm64-v8a")
+if(NOT ANDROID)
+    # Desktop: JNI hlavičky dodá úloha Gradle z toolchainu projektu (PLUME_JNI_INCLUDE_DIRS).
+    # CPU varianta je stejná jako na Androidu: na arm64 dot product (všechny Apple Silicon),
+    # na x86_64 výchozí sada ggml bez GGML_NATIVE, tedy AVX2, FMA, F16C a BMI2 (Haswell a novější).
+    # Starší procesor by spadl na SIGILL, proto se tam model nenabízí (`DesktopLiteRtPlatform`).
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+        set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+    endif()
+elseif(ANDROID_ABI STREQUAL "arm64-v8a")
     # Dot product (ARMv8.2) mají všechny telefony, na kterých se model nabízí (Android 12+,
     # 6 GB paměti a víc); bez něj by kvantizované násobení jelo několikrát pomaleji. Novější
     # instrukce (i8mm, SVE) by na starších jádrech skončily SIGILL.
@@ -44,4 +57,9 @@ set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
 add_library(plume_llama SHARED plume_llama.cpp)
-target_link_libraries(plume_llama PRIVATE llama ggml android log)
+if(ANDROID)
+    target_link_libraries(plume_llama PRIVATE llama ggml android log)
+else()
+    target_include_directories(plume_llama PRIVATE ${PLUME_JNI_INCLUDE_DIRS})
+    target_link_libraries(plume_llama PRIVATE llama ggml)
+endif()
