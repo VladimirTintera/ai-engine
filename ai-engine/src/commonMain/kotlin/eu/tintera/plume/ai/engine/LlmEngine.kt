@@ -73,3 +73,6 @@ sealed interface LlmContent {
 
 /** Jméno implementace nad LiteRT-LM (:client:ai-litert); keep pravidlo pro R8 je v androidApp. */
 const val LITERT_ENGINE_FACTORY = "eu.tintera.plume.ai.litert.LiteRtEngineFactory"
+
+/** Jméno implementace nad llama.cpp (:client:ai-llamacpp, jen Android); keep pravidlo v androidApp. */
+const val LLAMACPP_ENGINE_FACTORY = "eu.tintera.plume.ai.llamacpp.LlamaCppEngineFactory"
