@@ -3,10 +3,13 @@
 //
 // Text jde přes hranici jako BAJTY UTF-8, ne jako `jstring`: JNI `NewStringUTF`
 // a `GetStringUTFChars` pracují s „modified UTF-8", ve kterém emoji (čtyřbajtové znaky)
-// vypadají jinak, a CheckJNI na ně aplikaci shodí. Konverzace bývají emoji plné.
+// vypadají jinak, a CheckJNI na ně aplikaci shodí. Konverzace bývají emoji plné. Totéž platí
+// pro cestu k modelu: na Windows ji ggml otevírá jako UTF-8 (`ggml_fopen`) a jméno uživatele
+// v `%LOCALAPPDATA%` bývá s diakritikou.
+//
+// Překládá se pro Android i desktop (macOS, Windows, Linux); liší se jen logování.
 
 #include <jni.h>
-#include <android/log.h>
 
 #include <algorithm>
 #include <string>
@@ -15,8 +18,17 @@
 #include "llama.h"
 
 #define LOG_TAG "PlumeLlama"
+
+#ifdef __ANDROID__
+#include <android/log.h>
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+// Desktop: na standardní chybový výstup, který ladicí běh ukáže v konzoli.
+#include <cstdio>
+#define LOGW(...) (std::fprintf(stderr, LOG_TAG " W: " __VA_ARGS__), std::fputc('\n', stderr))
+#define LOGE(...) (std::fprintf(stderr, LOG_TAG " E: " __VA_ARGS__), std::fputc('\n', stderr))
+#endif
 
 namespace {
 
@@ -35,11 +47,16 @@ struct Session {
 };
 
 void logCallback(ggml_log_level level, const char *text, void *) {
+#ifdef __ANDROID__
     if (level == GGML_LOG_LEVEL_ERROR) {
         __android_log_write(ANDROID_LOG_ERROR, LOG_TAG, text);
     } else if (level == GGML_LOG_LEVEL_WARN) {
         __android_log_write(ANDROID_LOG_WARN, LOG_TAG, text);
     }
+#else
+    // Text od llama.cpp končí koncem řádku sám.
+    if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) std::fputs(text, stderr);
+#endif
 }
 
 std::string bytes(JNIEnv *env, jbyteArray array) {
@@ -103,11 +120,13 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_init(JNIEnv *, jclass) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jstring jpath, jint nCtx, jint nThreads) {
-    const char *path = env->GetStringUTFChars(jpath, nullptr);
+Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArray jpath, jint nCtx, jint nThreads) {
+    const std::string path = bytes(env, jpath);
     llama_model_params modelParams = llama_model_default_params();
-    llama_model *model = llama_model_load_from_file(path, modelParams);
-    env->ReleaseStringUTFChars(jpath, path);
+    // Výchozí je „všechny vrstvy na GPU"; GPU backend se sice nepřekládá, ale jen CPU má platit
+    // i tehdy, kdyby ho do buildu někdo přidal (viz LlamaCppEngineFactory).
+    modelParams.n_gpu_layers = 0;
+    llama_model *model = llama_model_load_from_file(path.c_str(), modelParams);
     if (model == nullptr) return 0;
 
     llama_context_params ctxParams = llama_context_default_params();

@@ -1,54 +1,19 @@
 plugins {
-    alias(libs.plugins.androidLibrary)
+    alias(libs.plugins.kotlinJvm)
 }
 
 /**
  * Modely GGUF (EuroLLM a další, které LiteRT-LM neumí) přes llama.cpp: implementace
- * [eu.tintera.plume.ai.engine.LlmEngineFactory]. Jediné místo s llama.cpp.
+ * [eu.tintera.plume.ai.engine.LlmEngineFactory]. Jediné místo s llama.cpp — submodul
+ * (`llama.cpp/`), vlastní JNI most i CMakeLists (`src/main/cpp`) jsou tady.
  *
- * - **llama.cpp je git submodul** (`llama.cpp/`, připnutý na vydání `bNNNNN`) a překládá se
- *   z NDK přes CMake (`src/main/cpp`). Žádný hotový wrapper z Maven: ty dělají jednotlivci
- *   a projekt by s nimi měl stejné riziko jako s wrapperem TDLib, jen bez hranice kolem.
- *   Bump = `git -C client/ai-llamacpp/llama.cpp fetch --depth 1 origin tag bNNNNN` a checkout.
- * - **Jen Android** (`com.android.library`, ne KMP — KMP plugin pro Android nativní build
- *   z CMake neumí). Desktop zatím nemá; model se tam nenabízí (`DesktopLiteRtPlatform.canRun`).
- * - **Do aplikace ho dává součást z Google Play** (:client:llamacppFeature), ne `shared`.
- * - **Jen arm64-v8a a x86_64** (x86_64 kvůli emulátoru). Na 32bitových telefonech se model
- *   nenabízí a součást má pro jejich ABI prázdný soubor, viz client/llamacppFeature.
- * - **NDK r28+ kvůli 16KB stránkám**, které Play od Androidu 15 vyžaduje u nativních knihoven.
+ * - **Čistě JVM modul, společný Androidu i desktopu.** Kód nesahá na nic z Androidu; nativní
+ *   knihovnu pro každou platformu staví modul, který ji balí: :client:ai-llamacpp-android (NDK,
+ *   do součásti z Google Play :client:llamacppFeature) a :client:ai-llamacpp-desktop (CMake
+ *   systému, do balíčku desktopu). Proto se tady nic nativního nepřekládá — knihovna pro Mac
+ *   by jinak skončila i v součásti pro Android.
+ * - **Jak se knihovna načte**, rozhoduje to, jestli leží v jaru (`LlamaNative.loadLibrary`).
  */
-android {
-    namespace = "eu.tintera.plume.ai.llamacpp"
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
-    ndkVersion = libs.versions.ndk.get()
-
-    defaultConfig {
-        minSdk = libs.versions.android.minSdk.get().toInt()
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
-        externalNativeBuild {
-            cmake {
-                arguments += "-DCMAKE_BUILD_TYPE=Release"
-                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
-            }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path("src/main/cpp/CMakeLists.txt")
-            version = libs.versions.cmake.get()
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-}
-
-// Kotlin/Android je v AGP 9 vestavěný — plugin org.jetbrains.kotlin.android se neaplikuje.
 kotlin {
     jvmToolchain(17)
 }

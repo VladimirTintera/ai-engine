@@ -7,7 +7,9 @@ import eu.tintera.plume.ai.engine.LlmEngine
 import eu.tintera.plume.ai.engine.LlmEngineConfig
 import eu.tintera.plume.ai.engine.LlmEngineFactory
 import eu.tintera.plume.ai.engine.LlmSampling
+import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -15,6 +17,8 @@ import kotlinx.coroutines.flow.flow
 
 /**
  * llama.cpp (modely GGUF, třeba EuroLLM) za rozhraním [LlmEngineFactory]. Jen text a jen CPU.
+ * Týž kód na Androidu i desktopu; liší se jen původ nativní knihovny ([LlamaNative.loadLibrary])
+ * a počet vláken ([threads]).
  *
  * Vytváří se reflexí podle jména ([eu.tintera.plume.ai.engine.LLAMACPP_ENGINE_FACTORY]), proto
  * veřejný konstruktor bez parametrů.
@@ -29,18 +33,23 @@ class LlamaCppEngineFactory : LlmEngineFactory {
     override fun open(config: LlmEngineConfig): LlmEngine {
         require(!config.audio && !config.vision) { "llama.cpp runtime is text only" }
         require(config.backend == LlmBackend.Cpu) { "llama.cpp runtime runs on the CPU only" }
-        LlamaNative.ensureInitialized()
-        val handle = LlamaNative.load(config.modelPath, config.maxNumTokens, threads())
+        LlamaNative.ensureInitialized(File(config.cacheDir))
+        val handle = LlamaNative.load(config.modelPath.encodeToByteArray(), config.maxNumTokens, threads())
         if (handle == 0L) throw IOException("llama.cpp failed to load ${config.modelPath}")
         return LlamaCppEngine(handle)
     }
 
     /**
-     * Vlákna na výpočet: polovina jader, nejvýš 4 a nejméně 2. Telefon má velká a malá jádra
+     * Vlákna na výpočet: polovina logických jader, nejméně 2. Telefon má velká a malá jádra
      * a vlákno na malém jádře zdržuje ostatní; víc než 4 dává podle příkladu llama.cpp pro
-     * Android jen horší časy.
+     * Android jen horší časy. Na desktopu je polovina zhruba počet fyzických jader (Intel a AMD
+     * mají dvě vlákna na jádro, Apple Silicon půlku úsporných jader), strop 8 drží výpočet
+     * pryč od úsporných jader velkých procesorů a nechá stroj použitelný.
      */
-    private fun threads(): Int = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
+    private fun threads(): Int =
+        (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, if (android) 4 else 8)
+
+    private val android = System.getProperty("java.vm.name") == "Dalvik"
 }
 
 private class LlamaCppEngine(private val handle: Long) : LlmEngine {
@@ -96,27 +105,73 @@ private class LlamaCppConversation(private val handle: Long, private val samplin
     override fun close() = Unit
 }
 
-/** Nativní strana (`plume_llama.cpp`). Knihovna jen v součásti z Google Play. */
+/**
+ * Nativní strana (`plume_llama.cpp`). Na Androidu je knihovna v součásti z Google Play, na
+ * desktopu v jaru :client:ai-llamacpp-desktop.
+ */
 internal object LlamaNative {
 
     @Volatile
     private var initialized = false
 
-    fun ensureInitialized() {
+    fun ensureInitialized(cacheDir: File) {
         if (initialized) return
         synchronized(this) {
             if (initialized) return
-            System.loadLibrary(LIBRARY)
+            loadLibrary(cacheDir)
             init()
             initialized = true
         }
     }
 
+    /**
+     * Knihovna v jaru (desktop) se vybalí do [cacheDir] a načte cestou; jinak se načte jménem
+     * (Android: součást z Play, kterou už načetl `SplitInstallHelper`, viz `PlayLiteRtRuntime`).
+     *
+     * Vybaluje se do složky pojmenované podle otisku obsahu, ne přes starou kopii: nahranou DLL
+     * Windows přepsat ani smazat nedovolí, takže by nová verze aplikace vedle běžící staré
+     * neměla kam. Starší složky se uklidí, pokud jdou smazat (nahraná zůstane do příště).
+     */
+    private fun loadLibrary(cacheDir: File) {
+        val name = System.mapLibraryName(LIBRARY)
+        val bytes = LlamaNative::class.java.getResourceAsStream("$RESOURCE_ROOT/${desktopPlatform()}/$name")
+            ?.use { it.readBytes() }
+        if (bytes == null) {
+            System.loadLibrary(LIBRARY)
+            return
+        }
+        val root = File(cacheDir, "llamacpp")
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }.take(16)
+        val file = File(root, "$digest/$name")
+        if (!file.isFile || file.length() != bytes.size.toLong()) {
+            file.parentFile.mkdirs()
+            val part = File(file.parentFile, "$name.part")
+            part.writeBytes(bytes)
+            file.delete()
+            if (!part.renameTo(file)) throw IOException("Could not unpack $name to ${file.parentFile}")
+        }
+        root.listFiles()?.filter { it.name != digest }?.forEach { it.deleteRecursively() }
+        System.load(file.absolutePath)
+    }
+
+    /** `darwin-aarch64`, `windows-x86_64`… jako složky v jaru (client/ai-llamacpp-desktop). */
+    private fun desktopPlatform(): String {
+        val os = System.getProperty("os.name").lowercase()
+        val system = when {
+            "mac" in os -> "darwin"
+            "windows" in os -> "windows"
+            else -> "linux"
+        }
+        val arch = System.getProperty("os.arch").lowercase()
+        return "$system-" + if ("aarch64" in arch || "arm64" in arch) "aarch64" else "x86_64"
+    }
+
     @JvmStatic
     private external fun init()
 
+    /** [path] jako bajty UTF-8, viz hlavička `plume_llama.cpp`. */
     @JvmStatic
-    external fun load(path: String, contextTokens: Int, threads: Int): Long
+    external fun load(path: ByteArray, contextTokens: Int, threads: Int): Long
 
     @JvmStatic
     external fun start(handle: Long, prompt: ByteArray, topK: Int, topP: Float, temperature: Float, maxTokens: Int): Int
@@ -129,4 +184,7 @@ internal object LlamaNative {
 
     /** `libplume_llama.so` (src/main/cpp/CMakeLists.txt); totéž jméno načítá i `PlayLiteRtRuntime`. */
     const val LIBRARY = "plume_llama"
+
+    /** Kde je knihovna v jaru na desktopu; totéž hledá `DesktopLiteRtPlatform`. */
+    private const val RESOURCE_ROOT = "/eu/tintera/plume/ai/llamacpp/native"
 }
