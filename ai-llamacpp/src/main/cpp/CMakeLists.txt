@@ -31,7 +31,10 @@ set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 # knihoven aplikace vznikl dřív než součást. ggml má vlastní pool vláken.
 # Na desktopu by navíc chtěla vlastní runtime (vcomp140.dll z VC++ Redistributable, libomp).
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-# Jen CPU i na Macu: aplikace o GPU nežádá (`ModelRuntime.gpu`), viz LlamaCppEngineFactory.
+# GPU jen přes Metal na Macu s Apple Silicon (níž); jinde se žádný GPU backend nepřekládá
+# a aplikace o GPU nežádá (`LiteRtPlatform.gpu`). Shadery jsou vložené v knihovně
+# (GGML_METAL_EMBED_LIBRARY) a překládají se při prvním načtení — jinak by Metal hledal
+# soubor `default.metallib` vedle knihovny, která leží vybalená v keši.
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 
 if(NOT ANDROID)
@@ -41,6 +44,11 @@ if(NOT ANDROID)
     # Starší procesor by spadl na SIGILL, proto se tam model nenabízí (`DesktopLiteRtPlatform`).
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
         set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+        if(APPLE)
+            set(GGML_METAL ON CACHE BOOL "" FORCE)
+            set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+            set(GGML_METAL_NDEBUG ON CACHE BOOL "" FORCE)
+        endif()
     endif()
 elseif(ANDROID_ABI STREQUAL "arm64-v8a")
     # Dot product (ARMv8.2) mají všechny telefony, na kterých se model nabízí (Android 12+,

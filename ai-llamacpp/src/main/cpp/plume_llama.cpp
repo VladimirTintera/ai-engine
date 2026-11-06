@@ -119,13 +119,27 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_init(JNIEnv *, jclass) {
     llama_backend_init();
 }
 
+/** Má build GPU backend (Metal na Macu) a našel zařízení? Volá se po `init`, nic nenačítá. */
+JNIEXPORT jboolean JNICALL
+Java_eu_tintera_plume_ai_llamacpp_LlamaNative_hasGpu(JNIEnv *, jclass) {
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        const auto type = ggml_backend_dev_type(ggml_backend_dev_get(i));
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) return JNI_TRUE;
+    }
+    return JNI_FALSE;
+}
+
 JNIEXPORT jlong JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArray jpath, jint nCtx, jint nThreads) {
+Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArray jpath, jint nCtx, jint nThreads, jboolean gpu) {
     const std::string path = bytes(env, jpath);
     llama_model_params modelParams = llama_model_default_params();
-    // Výchozí je „všechny vrstvy na GPU"; GPU backend se sice nepřekládá, ale jen CPU má platit
-    // i tehdy, kdyby ho do buildu někdo přidal (viz LlamaCppEngineFactory).
-    modelParams.n_gpu_layers = 0;
+    // Výchozí je „všechny vrstvy na GPU, je-li nějaké"; na CPU se GPU musí vypnout výslovně, jinak
+    // by model na Macu šel na Metal i tehdy, když ho aplikace po selhání GPU chce na CPU.
+    // Nestačí na to vrstvy: prázdný seznam zařízení (jen ukončovací nullptr) GPU modelu vůbec
+    // nedá a `op_offload` níž mu nedovolí poslat tam velké dávky vah z paměti CPU.
+    ggml_backend_dev_t noDevices[] = {nullptr};
+    if (!gpu) modelParams.devices = noDevices;
+    modelParams.n_gpu_layers = gpu ? -1 : 0;
     llama_model *model = llama_model_load_from_file(path.c_str(), modelParams);
     if (model == nullptr) return 0;
 
@@ -135,6 +149,8 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArr
     ctxParams.n_ubatch = kBatchSize;
     ctxParams.n_threads = nThreads;
     ctxParams.n_threads_batch = nThreads;
+    ctxParams.offload_kqv = gpu;
+    ctxParams.op_offload = gpu;
     llama_context *ctx = llama_init_from_model(model, ctxParams);
     if (ctx == nullptr) {
         llama_model_free(model);
