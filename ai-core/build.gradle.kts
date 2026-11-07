@@ -9,10 +9,9 @@ plugins {
  * a počítané přes LiteRT-LM nebo llama.cpp (Android a desktop), Apple Intelligence přes most do
  * Swiftu (iOS). Stahování modelu, jeho stav pro obrazovku a správa enginu jsou tady.
  *
- * **Nic z Plume**: prompty, volba modelu pro úlohu, nastavení, texty a UI nese aplikace a co od
- * ní knihovna potřebuje (síť, notifikace stahování, dekódování zvuku, adresář modelů), dostane
- * přes rozhraní. Modul se přesune do knihovny ai-engine (balíčky `eu.tintera.ai.*`, Apache-2.0)
- * sdílené s dalšími aplikacemi, viz docs/poznatky/ai-v-zarizeni.md, „Modul :ai-core“.
+ * **Nic z aplikace**: prompty, volba modelu pro úlohu, nastavení, texty a UI nese aplikace a co
+ * od ní knihovna potřebuje (síť, notifikace stahování, dekódování zvuku, adresář modelů), dostane
+ * přes rozhraní. Viz README a docs/cs/ai-v-zarizeni.md, „Modul :client:ai-core“ (z doby v Plume).
  *
  * Runtime modelů (:ai-litert, :ai-llamacpp) tu není ani při překladu, jen jejich
  * rozhraní (:ai-engine); na Androidu jsou to součásti z Google Play, které deklaruje

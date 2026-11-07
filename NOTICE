@@ -1,0 +1,51 @@
+ai-engine
+Copyright 2026 Vladimír Tintěra
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+It was originally developed as part of the Plume app (https://github.com/VladimirTintera/telegram).
+
+-------------------------------------------------------------------------------
+Third-party components
+-------------------------------------------------------------------------------
+
+llama.cpp / ggml (git submodule ai-llamacpp/llama.cpp, compiled into the native
+library ai_engine_llama)
+  https://github.com/ggml-org/llama.cpp
+  Copyright (c) 2023-2026 The ggml authors
+  Licensed under the MIT License; the full text is in ai-llamacpp/llama.cpp/LICENSE.
+  Apps that ship the native library must include this notice.
+
+LiteRT-LM (Maven dependency com.google.ai.edge.litertlm:litertlm-android / -jvm)
+  https://github.com/google-ai-edge/LiteRT-LM
+  Copyright Google LLC
+  Licensed under the Apache License, Version 2.0.
+
+ML Kit GenAI Prompt API (Maven dependencies com.google.mlkit:genai-prompt and
+com.google.mlkit:genai-schema), Google Play Feature Delivery
+(com.google.android.play:feature-delivery)
+  Proprietary Google SDKs, NOT covered by this repository's license. They are used
+  under Google's own terms (ML Kit Terms of Service, Google APIs Terms of Service,
+  Play Core Software Development Kit Terms of Service). Gemini Nano itself is
+  provided by Android AICore on supported devices and is not distributed here.
+
+Other dependencies (Kotlin, kotlinx.coroutines, Kermit, AndroidX, Gson) are
+licensed under the Apache License, Version 2.0.
+
+-------------------------------------------------------------------------------
+Models
+-------------------------------------------------------------------------------
+
+No model weights are included in or distributed with this repository. The model
+catalog (LiteRtModel) only points to files that the app downloads on the user's
+request from their original hosts (Hugging Face). Each model has its own license,
+which the user accepts by downloading it, for example:
+
+  - Gemma (Google): the license stated on the model card
+  - Qwen3, Qwen2.5 1.5B (Alibaba Cloud): Apache License 2.0
+  - EuroLLM, EuroMoE (utter-project): Apache License 2.0
+  - Aya Expanse 8B (Cohere Labs): CC BY-NC 4.0 and the Cohere Labs Acceptable Use
+    Policy, non-commercial use only, with attribution. Apps that offer it must
+    show the license to the user before the download.
+
+Apple Foundation Models (iOS 26+) are part of the operating system and are used
+through the app's own Swift bridge.

@@ -1,0 +1,174 @@
+# ai-engine
+
+On-device language models for Kotlin Multiplatform apps: one `OnDeviceAi` interface over
+
+- **Gemini Nano** on Android through ML Kit GenAI (Prompt API, Android AICore),
+- **downloaded models** on Android and desktop (JVM): Gemma and Qwen through
+  [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), EuroLLM and Aya Expanse (GGUF) through
+  [llama.cpp](https://github.com/ggml-org/llama.cpp),
+- **Apple Intelligence** (Foundation Models) on iOS 26+ through a small Swift bridge.
+
+The library downloads models (resumable, Wi-Fi/metered aware, in a WorkManager job on Android),
+reports their state for a settings screen, loads and unloads engines, falls back from GPU to CPU and
+routes each call to the right provider. Everything app-specific stays in the app: prompts, which
+model handles which task, settings, user-facing texts and UI.
+
+It was extracted from the [Plume](https://github.com/VladimirTintera/telegram) Telegram client and
+is shared with other apps by the same author. The API is not stable yet; there are no published
+artifacts — use it as a git submodule.
+
+## Modules
+
+| Module | Platforms | What it is |
+| --- | --- | --- |
+| `:ai-engine` | Android, JVM | Interface of an in-process model runtime (`LlmEngineFactory`, `LlmEngine`, `LlmConversation`). No dependencies besides coroutines. |
+| `:ai-core` | Android, JVM, iOS | `OnDeviceAi` and its providers: `MlKitOnDeviceAi` (Gemini Nano), `LiteRtOnDeviceAi` (downloaded models), `AppleOnDeviceAi` (iOS), `RoutingOnDeviceAi`. Model catalog, downloads, typed failures (`OnDeviceAiException`), Play Feature Delivery runtime loader. Depends only on `:ai-engine`, never on a runtime. |
+| `:ai-litert` | Android, JVM | `LlmEngineFactory` on top of LiteRT-LM (`.litertlm` files). The only module with `com.google.ai.edge.litertlm`. |
+| `:ai-llamacpp` | JVM (Android + desktop) | `LlmEngineFactory` on top of llama.cpp (GGUF files): Kotlin code, JNI bridge, `CMakeLists.txt` and the llama.cpp submodule. Builds nothing native itself. |
+| `:ai-llamacpp-android` | Android | Builds `libai_engine_llama.so` with the NDK (arm64-v8a, x86_64 for the emulator; 16 KB pages). |
+| `:ai-llamacpp-desktop` | JVM | Builds `ai_engine_llama` for the host OS/arch with CMake and puts it into the jar (Metal on Apple Silicon). Skipped locally without CMake or a compiler; an error on CI. |
+
+Packages are `eu.tintera.ai.engine`, `eu.tintera.ai.core`, `eu.tintera.ai.litert` and
+`eu.tintera.ai.llamacpp`.
+
+Runtimes are found **by class name at run time** (`LITERT_ENGINE_FACTORY`,
+`LLAMACPP_ENGINE_FACTORY` in `:ai-engine`), so the base of an Android app never has to see them at
+compile time — on Android they normally live in on-demand Play feature modules (see below). The R8
+keep rules for this are shipped as consumer rules of `:ai-core` and `:ai-litert`.
+
+## Using it in an app
+
+### 1. Submodule and composite build
+
+```bash
+git submodule add https://github.com/VladimirTintera/ai-engine.git external/ai-engine
+git submodule update --init --recursive --depth 1
+```
+
+llama.cpp is a nested (shallow) submodule, so clones of the app need
+`git submodule update --init --recursive`, and CI checkouts need `submodules: recursive`.
+
+```kotlin
+// settings.gradle.kts of the app
+includeBuild("external/ai-engine")
+```
+
+Gradle substitutes the coordinates `eu.tintera.ai:<module>` with the projects of the included build:
+
+```kotlin
+// a KMP module of the app
+commonMain.dependencies {
+    api("eu.tintera.ai:ai-core")
+}
+```
+
+Requirements:
+
+- **The same AGP and Kotlin versions as the app** (`gradle/libs.versions.toml` here): one Gradle
+  build cannot load two versions of AGP. Bump them together.
+- The included build looks for the Android SDK on its own: `external/ai-engine/local.properties`
+  (`sdk.dir=…`) or `ANDROID_HOME`. AGP needs the NDK version from the catalog (`ndk`) when it
+  configures `:ai-llamacpp-android`, and CMake (`cmake`) for llama.cpp.
+- JDK toolchain 17 (resolved through foojay if missing).
+
+### 2. Wire the providers
+
+Android (the same shape works with any DI):
+
+```kotlin
+val confirmations = SplitInstallConfirmations()
+val liteRt = LiteRtOnDeviceAi(
+    // The app subclasses AiModelDownloadWorker: WorkManager remembers the class NAME.
+    AndroidLiteRtPlatform(context, MyModelDownloadWorker::class.java, audio = myAudioDecoder),
+    mapOf(
+        // One Play feature module per runtime, declared by the app (see below).
+        ModelRuntime.LiteRt to PlayLiteRtRuntime(
+            context,
+            module = "litertFeature",
+            nativeLibrary = "litertlm_jni",
+            factoryClass = LITERT_ENGINE_FACTORY,
+            confirmations = confirmations,
+        ),
+        ModelRuntime.LlamaCpp to PlayLiteRtRuntime(
+            context,
+            module = "llamacppFeature",
+            nativeLibrary = LLAMACPP_NATIVE_LIBRARY,
+            factoryClass = LLAMACPP_ENGINE_FACTORY,
+            confirmations = confirmations,
+        ),
+    )::getValue,
+    myConnectivity,
+    meteredNetwork = AndroidMeteredNetwork(context),
+)
+val ai: OnDeviceAi = RoutingOnDeviceAi(geminiNano = MlKitOnDeviceAi(), liteRt = liteRt)
+```
+
+Desktop (JVM): `LiteRtOnDeviceAi(DesktopLiteRtPlatform(modelsDirectory, audio), runtimes, …)` with
+`BundledLiteRtRuntime(LITERT_ENGINE_FACTORY)` / `BundledLiteRtRuntime(LLAMACPP_ENGINE_FACTORY)`;
+the app puts `:ai-litert` and `:ai-llamacpp-desktop` on its runtime classpath.
+
+iOS: export `:ai-core` from the app's framework (`export("eu.tintera.ai:ai-core")` with an `api`
+dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models and assign it to
+`IosOnDeviceModel.model` before creating `AppleOnDeviceAi`. A reference implementation is in
+[`ios/AppleTextModel.swift`](ios/AppleTextModel.swift).
+
+### 3. What the app provides
+
+- **Prompts and task selection.** `generate`, `transcribe(variant, audioPath, prompt)` and
+  `describeImage(variant, imagePath, prompt)` take a finished prompt.
+- **Interfaces:** `Connectivity`, `AudioClipDecoder` (WAV 16 kHz mono, max 30 s; optional),
+  `ModelDownloadNotifications` (channel, icon and texts of the download notification), a models
+  directory on desktop, `MeteredNetwork`, `DeviceLoad`.
+- **User-facing texts.** Failures come as `OnDeviceAiException` with an `AiFailureReason`; the app
+  maps them to messages.
+- **The Play consent dialog.** Observe `SplitInstallConfirmations.pending` in the root activity,
+  call `markShown`, and pass the result back from `takeShown()`.
+- **Play Feature Delivery modules.** The app declares one `com.android.dynamic-feature` module per
+  runtime (no code, it only depends on `eu.tintera.ai:ai-litert` resp.
+  `eu.tintera.ai:ai-llamacpp-android`) and lists them in `dynamicFeatures`. The module name is the
+  `module` passed to `PlayLiteRtRuntime`. For development installs without Play, install the
+  feature together with the app.
+- **Structured output types** for Gemini Nano: the app's response classes, their
+  `GenerableProvider`s (`generableStringField` helps), the `META-INF/services` entries and keep
+  rules for the classes Gson fills.
+
+## Limitations
+
+- **Gemini Nano only on devices with Android AICore** (recent Pixel, Galaxy and other flagships)
+  and **not on the emulator**. ML Kit GenAI is a proprietary beta SDK and its API may change.
+- **Gemini Nano only in the foreground.** AICore refuses inference from background work; downloads
+  of other models run in WorkManager, inference does not.
+- **Gson must stay below 2.14** (`strictly 2.13.2` in `:ai-litert`). LiteRT-LM pulls Gson 2.14,
+  whose new class breaks the relocated Gson inside ML Kit and crashes Gemini Nano structured
+  output. Guarded by `GsonForMlKitTest`. Apps that add Gson themselves must respect it.
+- **Play Feature Delivery modules must be declared by the apps** — a library cannot declare
+  dynamic features. Outside Google Play (sideloaded APK, other stores) on-demand install fails and
+  the downloaded models are unavailable.
+- **iOS only through the Swift bridge** — Kotlin/Native cannot call the Swift-only
+  `FoundationModels`. Text generation only (no structured output, audio or images on iOS yet).
+- Downloaded models need arm64, Android 12+ and enough RAM (per catalog entry); llama.cpp on
+  desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS.
+- The model catalog (`LiteRtModel`) is still an enum with the models used by Plume; turning it
+  into data supplied by the app is planned.
+- Model weights are never bundled. Each model has its own license (Aya Expanse: CC BY-NC 4.0,
+  non-commercial); see [NOTICE](NOTICE).
+
+## Building
+
+```bash
+git clone --recurse-submodules --shallow-submodules https://github.com/VladimirTintera/ai-engine.git
+./gradlew build
+```
+
+`build` compiles all targets, runs the JVM, Android host and (on macOS) iOS simulator tests, builds
+the Android libraries including llama.cpp from the NDK and the desktop llama.cpp library for the
+host. iOS klibs need macOS with Xcode. `-PllamaCppTestModel=<file.gguf>` lets
+`LlamaCppDesktopTest` actually run a model.
+
+Engineering notes (in Czech) are in [docs/cs/ai-v-zarizeni.md](docs/cs/ai-v-zarizeni.md), an
+English overview in [docs/on-device-ai.md](docs/on-device-ai.md).
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE) for third-party components
+(llama.cpp under MIT, LiteRT-LM under Apache 2.0, ML Kit GenAI as a proprietary dependency).

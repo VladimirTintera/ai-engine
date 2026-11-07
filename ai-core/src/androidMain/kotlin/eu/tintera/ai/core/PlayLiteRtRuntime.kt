@@ -33,7 +33,7 @@ import kotlinx.coroutines.flow.callbackFlow
  *   v aktivitě přes [SplitInstallConfirmations]; dokud uživatel neodpoví, instalace stojí.
  * - **Mimo Google Play to nejde** (APK z `assembleDebug`, jiný obchod) — instalace selže
  *   (`APP_NOT_OWNED`, -15) a model se nestáhne. Pro vývoj se součást instaluje spolu s aplikací, viz
- *   docs/poznatky/ai-v-zarizeni.md, „Runtime jako součást z Google Play".
+ *   docs/cs/ai-v-zarizeni.md, „Runtime jako součást z Google Play".
  */
 class PlayLiteRtRuntime(
     context: Context,
