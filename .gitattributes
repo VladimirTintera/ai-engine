@@ -1,0 +1,15 @@
+# Line endings: always LF in the repository and the working tree (see .editorconfig),
+# regardless of each developer's core.autocrlf.
+* text=auto eol=lf
+
+# Windows scripts need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files are never converted.
+*.jar binary
+*.png binary
+*.jpg binary
+*.so binary
+*.dylib binary
+*.dll binary

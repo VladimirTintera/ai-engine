@@ -1,0 +1,95 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # JVM and Android: compilation of all non-Apple targets, JVM/host tests, Android libraries
+  # (including llama.cpp from the NDK) and the desktop llama.cpp library for Linux.
+  jvm-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # llama.cpp is a shallow submodule (ai-llamacpp/llama.cpp), every build needs it.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      # Must match `jvmToolchain(17)` in the modules, otherwise the foojay resolver downloads it again.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # AGP needs the NDK when configuring :ai-llamacpp-android (`ndkVersion`), and CMake from the
+      # SDK builds llama.cpp for Android and the desktop. MUST match `android-compileSdk`, `ndk`
+      # and `cmake` in gradle/libs.versions.toml.
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.0 ndk;29.0.13846066 cmake;3.31.0'
+
+      # The project gradle.properties assumes a developer machine.
+      - name: Limit Gradle memory for CI
+        run: |
+          mkdir -p ~/.gradle
+          {
+            echo 'org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -XX:+UseParallelGC'
+            echo 'kotlin.daemon.jvmargs=-Xmx2g'
+          } >> ~/.gradle/gradle.properties
+
+      # iOS targets are skipped on Linux (macOS job below).
+      - name: Build
+        run: ./gradlew build --continue
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-jvm-android
+          path: '**/build/reports/tests/'
+
+  # iOS: klibs of :ai-core for device and simulator, common tests on the simulator, and the macOS
+  # desktop llama.cpp library (Metal).
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # Configuring the build needs the Android SDK with the NDK even for iOS tasks.
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.0 ndk;29.0.13846066 cmake;3.31.0'
+
+      - name: Build iOS klibs and run simulator tests
+        run: >
+          ./gradlew --continue
+          :ai-core:iosArm64MainKlibrary
+          :ai-core:iosSimulatorArm64MainKlibrary
+          :ai-core:iosSimulatorArm64Test
+          :ai-llamacpp-desktop:test
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-ios
+          path: '**/build/reports/tests/'
