@@ -1,17 +1,17 @@
 package eu.tintera.ai.core
 
-import eu.tintera.plume.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmEngineFactory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * Desktop: runtime je v balíčku aplikace (:client:desktopApp závisí na :client:ai-litert
- * a :client:ai-llamacpp-desktop), nic se nedoinstalovává. Chybí jen v buildu, který modul
+ * Desktop: runtime je v balíčku aplikace (v Plume :client:desktopApp závisí na :ai-litert
+ * a :ai-llamacpp-desktop), nic se nedoinstalovává. Chybí jen v buildu, který modul
  * nepřibalil — pak se model nenabídne stejně jako bez nativní knihovny
  * (`DesktopLiteRtPlatform.canRun`). Jedna instance na runtime ([factoryClass]).
  */
 class BundledLiteRtRuntime(
-    /** Implementace [LlmEngineFactory], viz konstanty v :client:ai-engine. */
+    /** Implementace [LlmEngineFactory], viz konstanty v :ai-engine. */
     private val factoryClass: String,
 ) : LiteRtRuntime {
 

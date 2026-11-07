@@ -17,7 +17,7 @@
 
 #include "llama.h"
 
-#define LOG_TAG "PlumeLlama"
+#define LOG_TAG "AiEngineLlama"
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -114,14 +114,14 @@ std::string applyTemplate(const llama_model *model, const std::string &prompt) {
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_init(JNIEnv *, jclass) {
+Java_eu_tintera_ai_llamacpp_LlamaNative_init(JNIEnv *, jclass) {
     llama_log_set(logCallback, nullptr);
     llama_backend_init();
 }
 
 /** Má build GPU backend (Metal na Macu) a našel zařízení? Volá se po `init`, nic nenačítá. */
 JNIEXPORT jboolean JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_hasGpu(JNIEnv *, jclass) {
+Java_eu_tintera_ai_llamacpp_LlamaNative_hasGpu(JNIEnv *, jclass) {
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         const auto type = ggml_backend_dev_type(ggml_backend_dev_get(i));
         if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) return JNI_TRUE;
@@ -130,7 +130,7 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_hasGpu(JNIEnv *, jclass) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArray jpath, jint nCtx, jint nThreads, jboolean gpu) {
+Java_eu_tintera_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArray jpath, jint nCtx, jint nThreads, jboolean gpu) {
     const std::string path = bytes(env, jpath);
     llama_model_params modelParams = llama_model_default_params();
     // Výchozí je „všechny vrstvy na GPU, je-li nějaké"; na CPU se GPU musí vypnout výslovně, jinak
@@ -168,7 +168,7 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_load(JNIEnv *env, jclass, jbyteArr
  * −2 dekódování selhalo).
  */
 JNIEXPORT jint JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_start(JNIEnv *env, jclass, jlong handle, jbyteArray jprompt,
+Java_eu_tintera_ai_llamacpp_LlamaNative_start(JNIEnv *env, jclass, jlong handle, jbyteArray jprompt,
                                                      jint topK, jfloat topP, jfloat temperature, jint maxTokens) {
     auto *session = reinterpret_cast<Session *>(handle);
     const llama_vocab *vocab = llama_model_get_vocab(session->model);
@@ -211,7 +211,7 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_start(JNIEnv *env, jclass, jlong h
  * na konci (konec věty modelu, strop tokenů, plný kontext nebo chyba).
  */
 JNIEXPORT jbyteArray JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_next(JNIEnv *env, jclass, jlong handle) {
+Java_eu_tintera_ai_llamacpp_LlamaNative_next(JNIEnv *env, jclass, jlong handle) {
     auto *session = reinterpret_cast<Session *>(handle);
     if (session->finished) return nullptr;
     const llama_vocab *vocab = llama_model_get_vocab(session->model);
@@ -243,7 +243,7 @@ Java_eu_tintera_plume_ai_llamacpp_LlamaNative_next(JNIEnv *env, jclass, jlong ha
 }
 
 JNIEXPORT void JNICALL
-Java_eu_tintera_plume_ai_llamacpp_LlamaNative_free(JNIEnv *, jclass, jlong handle) {
+Java_eu_tintera_ai_llamacpp_LlamaNative_free(JNIEnv *, jclass, jlong handle) {
     auto *session = reinterpret_cast<Session *>(handle);
     if (session == nullptr) return;
     if (session->sampler != nullptr) llama_sampler_free(session->sampler);

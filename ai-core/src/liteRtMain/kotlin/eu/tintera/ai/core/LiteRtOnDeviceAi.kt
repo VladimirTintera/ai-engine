@@ -1,11 +1,11 @@
 package eu.tintera.ai.core
 
 import co.touchlab.kermit.Logger
-import eu.tintera.plume.ai.engine.LlmBackend
-import eu.tintera.plume.ai.engine.LlmContent
-import eu.tintera.plume.ai.engine.LlmEngine
-import eu.tintera.plume.ai.engine.LlmEngineConfig
-import eu.tintera.plume.ai.engine.LlmSampling
+import eu.tintera.ai.engine.LlmBackend
+import eu.tintera.ai.engine.LlmContent
+import eu.tintera.ai.engine.LlmEngine
+import eu.tintera.ai.engine.LlmEngineConfig
+import eu.tintera.ai.engine.LlmSampling
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -47,7 +47,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * našeho procesu. **Kód je společný pro Android a desktop** (source set `liteRtMain`); co se
  * liší, je za [LiteRtPlatform].
  *
- * - **Samotnou knihovnu LiteRT-LM tu nevidíme**, jen rozhraní enginu (:client:ai-engine). Runtime
+ * - **Samotnou knihovnu LiteRT-LM tu nevidíme**, jen rozhraní enginu (:ai-engine). Runtime
  *   dává [LiteRtRuntime]: na desktopu přibalený, na Androidu součást z Google Play, která se
  *   doinstaluje SPOLU s modelem ([download]). Model je připravený, až když je tu obojí.
  * - **Stahuje se do `.part` a přejmenovává až hotový.** Přítomnost výsledného souboru tedy

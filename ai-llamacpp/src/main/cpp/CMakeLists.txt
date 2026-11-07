@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-# Jedna knihovna `libplume_llama.so`: llama.cpp a ggml staticky, k tomu naše JNI (plume_llama.cpp).
-# Na Androidu ji staví AGP (externalNativeBuild v :client:ai-llamacpp), na desktopu úloha
-# `buildLlamaCppDesktop` (plugin `plume.llamacpp-desktop`) pro systém, na kterém se staví.
+# Jedna knihovna `libai_engine_llama.so`: llama.cpp a ggml staticky, k tomu naše JNI (ai_engine_llama.cpp).
+# Na Androidu ji staví AGP (externalNativeBuild v :ai-llamacpp), na desktopu úloha
+# `buildLlamaCppDesktop` (:ai-llamacpp-desktop) pro systém, na kterém se staví.
 #
 # Proč ne jako příklad `examples/llama.android`: ten staví backendy jako samostatné knihovny
 # (GGML_BACKEND_DL) a CPU variantu vybírá za běhu načtením z ADRESÁŘE nativních knihoven. Tahle
 # knihovna jde do součásti z Google Play a split APK nese knihovny uvnitř APK, ne v adresáři —
 # načíst by nebylo odkud. Jedna knihovna se načte přes `System.loadLibrary` jako každá jiná.
-project("plume_llama" LANGUAGES C CXX)
+project("ai_engine_llama" LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,7 +26,7 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 # KleidiAI by si zdrojáky stahoval z GitHubu při konfiguraci; build nemá sahat do sítě.
 set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
-# OpenMP by do součásti přidal sdílenou `libomp.so`, na kterou `libplume_llama.so` odkazuje.
+# OpenMP by do součásti přidal sdílenou `libomp.so`, na kterou `libai_engine_llama.so` odkazuje.
 # V součásti doinstalované za běhu (SplitCompat) ji linker hledat nemusí — jmenný prostor
 # knihoven aplikace vznikl dřív než součást. ggml má vlastní pool vláken.
 # Na desktopu by navíc chtěla vlastní runtime (vcomp140.dll z VC++ Redistributable, libomp).
@@ -38,7 +38,7 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 
 if(NOT ANDROID)
-    # Desktop: JNI hlavičky dodá úloha Gradle z toolchainu projektu (PLUME_JNI_INCLUDE_DIRS).
+    # Desktop: JNI hlavičky dodá úloha Gradle z toolchainu projektu (AI_ENGINE_JNI_INCLUDE_DIRS).
     # CPU varianta je stejná jako na Androidu: na arm64 dot product (všechny Apple Silicon),
     # na x86_64 výchozí sada ggml bez GGML_NATIVE, tedy AVX2, FMA, F16C a BMI2 (Haswell a novější).
     # Starší procesor by spadl na SIGILL, proto se tam model nenabízí (`DesktopLiteRtPlatform`).
@@ -64,10 +64,10 @@ endif()
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
-add_library(plume_llama SHARED plume_llama.cpp)
+add_library(ai_engine_llama SHARED ai_engine_llama.cpp)
 if(ANDROID)
-    target_link_libraries(plume_llama PRIVATE llama ggml android log)
+    target_link_libraries(ai_engine_llama PRIVATE llama ggml android log)
 else()
-    target_include_directories(plume_llama PRIVATE ${PLUME_JNI_INCLUDE_DIRS})
-    target_link_libraries(plume_llama PRIVATE llama ggml)
+    target_include_directories(ai_engine_llama PRIVATE ${AI_ENGINE_JNI_INCLUDE_DIRS})
+    target_link_libraries(ai_engine_llama PRIVATE llama ggml)
 endif()

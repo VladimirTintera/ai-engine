@@ -1,12 +1,12 @@
 package eu.tintera.ai.core
 
-import eu.tintera.plume.ai.engine.LlmBackend
-import eu.tintera.plume.ai.engine.LlmContent
-import eu.tintera.plume.ai.engine.LlmConversation
-import eu.tintera.plume.ai.engine.LlmEngine
-import eu.tintera.plume.ai.engine.LlmEngineConfig
-import eu.tintera.plume.ai.engine.LlmEngineFactory
-import eu.tintera.plume.ai.engine.LlmSampling
+import eu.tintera.ai.engine.LlmBackend
+import eu.tintera.ai.engine.LlmContent
+import eu.tintera.ai.engine.LlmConversation
+import eu.tintera.ai.engine.LlmEngine
+import eu.tintera.ai.engine.LlmEngineConfig
+import eu.tintera.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmSampling
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.AfterTest
@@ -31,7 +31,7 @@ import kotlinx.coroutines.runBlocking
  */
 class LiteRtGpuFallbackTest {
 
-    private val root = Files.createTempDirectory("plume-litert-gpu").toFile()
+    private val root = Files.createTempDirectory("ai-litert-gpu").toFile()
     private var gpuRuntimes = setOf(ModelRuntime.LiteRt)
     private val models = File(root, "ai-models").apply { mkdirs() }
 

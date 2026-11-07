@@ -22,7 +22,7 @@ import kotlinx.coroutines.withTimeout
  */
 class LiteRtRuntimeTest {
 
-    private val root = Files.createTempDirectory("plume-litert-runtime").toFile()
+    private val root = Files.createTempDirectory("ai-litert-runtime").toFile()
     private val models = File(root, "ai-models").apply { mkdirs() }
     private val model = LiteRtModel.E2B
     private val started: MutableList<LiteRtModel> = Collections.synchronizedList(mutableListOf())

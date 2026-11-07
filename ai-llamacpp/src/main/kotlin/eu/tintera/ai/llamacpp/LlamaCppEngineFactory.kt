@@ -1,12 +1,13 @@
-package eu.tintera.plume.ai.llamacpp
+package eu.tintera.ai.llamacpp
 
-import eu.tintera.plume.ai.engine.LlmBackend
-import eu.tintera.plume.ai.engine.LlmContent
-import eu.tintera.plume.ai.engine.LlmConversation
-import eu.tintera.plume.ai.engine.LlmEngine
-import eu.tintera.plume.ai.engine.LlmEngineConfig
-import eu.tintera.plume.ai.engine.LlmEngineFactory
-import eu.tintera.plume.ai.engine.LlmSampling
+import eu.tintera.ai.engine.LLAMACPP_NATIVE_LIBRARY
+import eu.tintera.ai.engine.LlmBackend
+import eu.tintera.ai.engine.LlmContent
+import eu.tintera.ai.engine.LlmConversation
+import eu.tintera.ai.engine.LlmEngine
+import eu.tintera.ai.engine.LlmEngineConfig
+import eu.tintera.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmSampling
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -20,7 +21,7 @@ import kotlinx.coroutines.flow.flow
  * Týž kód na Androidu i desktopu; liší se jen původ nativní knihovny ([LlamaNative.loadLibrary])
  * a počet vláken ([threads]).
  *
- * Vytváří se reflexí podle jména ([eu.tintera.plume.ai.engine.LLAMACPP_ENGINE_FACTORY]), proto
+ * Vytváří se reflexí podle jména ([eu.tintera.ai.engine.LLAMACPP_ENGINE_FACTORY]), proto
  * veřejný konstruktor bez parametrů.
  *
  * - **GPU jen přes Metal na Macu s Apple Silicon** — jinde se GPU backend nepřekládá a aplikace
@@ -109,8 +110,8 @@ private class LlamaCppConversation(private val handle: Long, private val samplin
 }
 
 /**
- * Nativní strana (`plume_llama.cpp`). Na Androidu je knihovna v součásti z Google Play, na
- * desktopu v jaru :client:ai-llamacpp-desktop.
+ * Nativní strana (`ai_engine_llama.cpp`). Na Androidu je knihovna v součásti z Google Play, na
+ * desktopu v jaru :ai-llamacpp-desktop.
  */
 internal object LlamaNative {
 
@@ -157,7 +158,7 @@ internal object LlamaNative {
         System.load(file.absolutePath)
     }
 
-    /** `darwin-aarch64`, `windows-x86_64`… jako složky v jaru (client/ai-llamacpp-desktop). */
+    /** `darwin-aarch64`, `windows-x86_64`… jako složky v jaru (ai-llamacpp-desktop). */
     private fun desktopPlatform(): String {
         val os = System.getProperty("os.name").lowercase()
         val system = when {
@@ -176,7 +177,7 @@ internal object LlamaNative {
     @JvmStatic
     external fun hasGpu(): Boolean
 
-    /** [path] jako bajty UTF-8, viz hlavička `plume_llama.cpp`; [gpu] = všechny vrstvy na GPU. */
+    /** [path] jako bajty UTF-8, viz hlavička `ai_engine_llama.cpp`; [gpu] = všechny vrstvy na GPU. */
     @JvmStatic
     external fun load(path: ByteArray, contextTokens: Int, threads: Int, gpu: Boolean): Long
 
@@ -189,9 +190,9 @@ internal object LlamaNative {
     @JvmStatic
     external fun free(handle: Long)
 
-    /** `libplume_llama.so` (src/main/cpp/CMakeLists.txt); totéž jméno načítá i `PlayLiteRtRuntime`. */
-    const val LIBRARY = "plume_llama"
+    /** `libai_engine_llama.so` (src/main/cpp/CMakeLists.txt); totéž jméno načítá i `PlayLiteRtRuntime`. */
+    const val LIBRARY = LLAMACPP_NATIVE_LIBRARY
 
     /** Kde je knihovna v jaru na desktopu; totéž hledá `DesktopLiteRtPlatform`. */
-    private const val RESOURCE_ROOT = "/eu/tintera/plume/ai/llamacpp/native"
+    private const val RESOURCE_ROOT = "/eu/tintera/ai/llamacpp/native"
 }

@@ -1,9 +1,9 @@
-package eu.tintera.plume.ai.llamacpp
+package eu.tintera.ai.llamacpp
 
-import eu.tintera.plume.ai.engine.LlmBackend
-import eu.tintera.plume.ai.engine.LlmContent
-import eu.tintera.plume.ai.engine.LlmEngineConfig
-import eu.tintera.plume.ai.engine.LlmSampling
+import eu.tintera.ai.engine.LlmBackend
+import eu.tintera.ai.engine.LlmContent
+import eu.tintera.ai.engine.LlmEngineConfig
+import eu.tintera.ai.engine.LlmSampling
 import java.io.File
 import java.io.IOException
 import kotlin.io.path.createTempDirectory
@@ -22,9 +22,9 @@ import kotlinx.coroutines.runBlocking
  */
 class LlamaCppDesktopTest {
 
-    private val cacheDir = createTempDirectory("plume-llamacpp-test").toFile().apply { deleteOnExit() }
+    private val cacheDir = createTempDirectory("ai-llamacpp-test").toFile().apply { deleteOnExit() }
 
-    private val bundled = LlamaCppEngineFactory::class.java.getResource("/eu/tintera/plume/ai/llamacpp/native") != null
+    private val bundled = LlamaCppEngineFactory::class.java.getResource("/eu/tintera/ai/llamacpp/native") != null
 
     @Test
     fun missingModelFailsInsteadOfCrashing() {

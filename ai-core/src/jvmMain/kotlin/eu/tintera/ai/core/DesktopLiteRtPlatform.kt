@@ -1,6 +1,7 @@
 package eu.tintera.ai.core
 
 import co.touchlab.kermit.Logger
+import eu.tintera.ai.engine.LLAMACPP_NATIVE_LIBRARY
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
@@ -31,9 +32,9 @@ import kotlinx.coroutines.launch
  *   knihovnu systému, na kterém se stavěl (v Plume plugin `plume.litertlm-desktop`), a Intel Mac ji
  *   nemá vůbec. **A jen na Javě 21+** ([javaSupported]): `litertlm-jvm` je pro ni přeložený
  *   a na starší by se model nabídl, ale při prvním použití selhal (aplikace proto musí běžet
- *   na JDK 21; Plume ho balí, `runtimeLauncher` v desktopApp).
+ *   na JDK 21; Plume ho balí, `runtimeLauncher` v desktopApp Plume).
  * - **EuroLLM (llama.cpp) taky jen s knihovnou v balíčku** ([llamaCppBundled], přeloží ji
- *   :client:ai-llamacpp-desktop) **a jen na procesoru, pro který je přeložená**
+ *   :ai-llamacpp-desktop) **a jen na procesoru, pro který je přeložená**
  *   ([llamaCppCpuSupported]) — jinak by první shrnutí shodilo celou aplikaci na SIGILL.
  *   Na Macu s Apple Silicon počítá na GPU přes Metal ([gpu]).
  * - **Obraz přes ImageIO** (JPEG a PNG z Telegramu; WebP neumí a popis se pak nenabídne),
@@ -64,7 +65,7 @@ class DesktopLiteRtPlatform(
         return runtime && totalMemoryBytes() >= model.minMemoryGb * GIB * MEMORY_TOLERANCE
     }
 
-    /** llama.cpp má GPU jen na Macu s Apple Silicon (Metal, client/ai-llamacpp/src/main/cpp). */
+    /** llama.cpp má GPU jen na Macu s Apple Silicon (Metal, ai-llamacpp/src/main/cpp). */
     override fun gpu(runtime: ModelRuntime): Boolean = when (runtime) {
         ModelRuntime.LiteRt -> true
         ModelRuntime.LlamaCpp -> os == Os.MacOs && arch == "aarch64"
@@ -182,22 +183,22 @@ class DesktopLiteRtPlatform(
 
         /**
          * Nese balíček knihovnu llama.cpp pro tenhle systém? Cesta je ta, odkud ji vybaluje
-         * `LlamaNative` (:client:ai-llamacpp), a kam ji dává :client:ai-llamacpp-desktop.
+         * `LlamaNative` (:ai-llamacpp), a kam ji dává :ai-llamacpp-desktop.
          */
         val llamaCppBundled: Boolean by lazy {
             val cpu = arch ?: return@lazy false
-            val library = System.mapLibraryName("plume_llama")
-            DesktopLiteRtPlatform::class.java.getResource("/eu/tintera/plume/ai/llamacpp/native/$system-$cpu/$library") != null
+            val library = System.mapLibraryName(LLAMACPP_NATIVE_LIBRARY)
+            DesktopLiteRtPlatform::class.java.getResource("/eu/tintera/ai/llamacpp/native/$system-$cpu/$library") != null
         }
 
         /**
-         * Umí procesor instrukce, pro které je llama.cpp přeložená (client/ai-llamacpp/src/main/cpp)?
+         * Umí procesor instrukce, pro které je llama.cpp přeložená (ai-llamacpp/src/main/cpp)?
          *
          * - **x86_64: AVX2** (s ním FMA, F16C a BMI2 — všechny procesory s AVX2 je mají). Ptá se
          *   HotSpotu: `UseAVX` si JVM při startu nastaví podle CPUID i podle toho, jestli registry
          *   AVX ukládá systém, tedy totéž, co by chtěla vědět vlastní kontrola. Starší procesory
          *   a Pentium či Celeron bez AVX tu vyjdou nulou. Bez `jdk.management` (v balíčku je,
-         *   `modules` v desktopApp) se nedá zjistit a model se nenabídne.
+         *   `modules` v desktopApp Plume) se nedá zjistit a model se nenabídne.
          * - **arm64: dot product.** Mají ho všechna Apple Silicon (M1 a novější); na Linuxu se
          *   čte z `/proc/cpuinfo` (`asimddp`). Pro Windows na ARM se knihovna nestaví.
          */

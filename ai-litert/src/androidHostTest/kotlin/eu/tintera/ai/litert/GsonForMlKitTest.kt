@@ -1,4 +1,4 @@
-package eu.tintera.plume.ai.litert
+package eu.tintera.ai.litert
 
 import kotlin.test.Test
 import kotlin.test.assertFailsWith

@@ -1,6 +1,6 @@
 package eu.tintera.ai.core
 
-import eu.tintera.plume.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmEngineFactory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

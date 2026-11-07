@@ -10,7 +10,7 @@ import kotlinx.coroutines.runBlocking
 /** Smazání modelu uvolní i jeho zkompilovanou keš ([LiteRtOnDeviceAi.delete], [LiteRtModel.ownsCacheFile]). */
 class LiteRtDeleteTest {
 
-    private val root = Files.createTempDirectory("plume-litert-delete").toFile()
+    private val root = Files.createTempDirectory("ai-litert-delete").toFile()
     private val models = File(root, "ai-models").apply { mkdirs() }
     private val cache = File(root, "ai-cache").apply { mkdirs() }
 

@@ -10,14 +10,14 @@ import com.google.android.play.core.splitinstall.SplitInstallRequest
 import com.google.android.play.core.splitinstall.SplitInstallSessionState
 import com.google.android.play.core.splitinstall.SplitInstallStateUpdatedListener
 import com.google.android.play.core.splitinstall.model.SplitInstallSessionStatus
-import eu.tintera.plume.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmEngineFactory
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Android: runtime modelu v zařízení je součást z Google Play stahovaná až na požádání (Play
- * Feature Delivery): LiteRT-LM v :client:litertFeature, llama.cpp v :client:llamacppFeature.
+ * Feature Delivery): LiteRT-LM v Plume :client:litertFeature, llama.cpp v Plume :client:llamacppFeature.
  * Do základu aplikace by přidaly desítky MB nativních knihoven na ABI, a model v zařízení si
  * zapne málokdo. Jedna instance na runtime ([module], [nativeLibrary], [factoryClass]).
  *
@@ -41,7 +41,7 @@ class PlayLiteRtRuntime(
     private val module: String,
     /** Hlavní nativní knihovna runtime bez `lib` a `.so`. */
     private val nativeLibrary: String,
-    /** Implementace [LlmEngineFactory] v součásti, viz konstanty v :client:ai-engine. */
+    /** Implementace [LlmEngineFactory] v součásti, viz konstanty v :ai-engine. */
     private val factoryClass: String,
     /** Kudy jde žádost Play o souhlas k aktivitě. */
     private val confirmations: SplitInstallConfirmations,

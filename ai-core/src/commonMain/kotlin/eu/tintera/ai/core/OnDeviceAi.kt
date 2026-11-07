@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.flow
  * Za rozhraním jsou na Androidu DVA runtime — Gemini Nano v AICore přes ML Kit Prompt API
  * (`com.google.mlkit.genai.*`, [MlKitOnDeviceAi]) a stahované modely přes LiteRT-LM nebo llama.cpp
  * ([LiteRtOnDeviceAi]; knihovnu runtime nevidí ani tenhle modul, jen rozhraní enginu
- * :client:ai-engine a [LiteRtRuntime]). Na iOS je to Apple Intelligence (`AppleOnDeviceAi`). Který
+ * :ai-engine a [LiteRtRuntime]). Na iOS je to Apple Intelligence (`AppleOnDeviceAi`). Který
  * se použije, určuje [ModelVariant.provider] a rozhoduje o tom [RoutingOnDeviceAi]. Kterou variantu
  * dostane která úloha, je věc aplikace — zapnuté mohou být oba modely a každá úloha jde jinému.
  *

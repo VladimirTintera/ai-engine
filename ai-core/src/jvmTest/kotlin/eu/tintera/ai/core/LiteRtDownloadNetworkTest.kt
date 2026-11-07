@@ -20,7 +20,7 @@ import kotlinx.coroutines.withTimeout
  */
 class LiteRtDownloadNetworkTest {
 
-    private val root = Files.createTempDirectory("plume-litert-network").toFile()
+    private val root = Files.createTempDirectory("ai-litert-network").toFile()
     private val model = LiteRtModel.E2B
     private val started: MutableList<Pair<LiteRtModel, Boolean>> = Collections.synchronizedList(mutableListOf())
     private val changed: MutableList<Pair<LiteRtModel, Boolean>> = Collections.synchronizedList(mutableListOf())

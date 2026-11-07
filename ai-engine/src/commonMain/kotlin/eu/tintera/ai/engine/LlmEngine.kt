@@ -1,10 +1,10 @@
-package eu.tintera.plume.ai.engine
+package eu.tintera.ai.engine
 
 import kotlinx.coroutines.flow.Flow
 
 /**
  * Runtime jazykového modelu, který počítá v našem procesu (LiteRT-LM). Stahování souboru modelu,
- * stav pro obrazovku a výběr modelu jsou věc aplikace (`LiteRtOnDeviceAi` v :client:shared);
+ * stav pro obrazovku a výběr modelu jsou věc vrstvy nad ním (`LiteRtOnDeviceAi` v :ai-core);
  * tady je jen to, co se nad souborem děje uvnitř runtime.
  *
  * Implementace musí mít veřejný konstruktor bez parametrů: aplikace ji vytváří reflexí podle
@@ -71,8 +71,19 @@ sealed interface LlmContent {
     class Image(val png: ByteArray) : LlmContent
 }
 
-/** Jméno implementace nad LiteRT-LM (:client:ai-litert); keep pravidlo pro R8 je v androidApp. */
-const val LITERT_ENGINE_FACTORY = "eu.tintera.plume.ai.litert.LiteRtEngineFactory"
+/**
+ * Jméno implementace nad LiteRT-LM (:ai-litert). Keep pravidlo pro R8 nese :ai-core
+ * (`consumer-rules.pro`), aplikace ho psát nemusí.
+ */
+const val LITERT_ENGINE_FACTORY = "eu.tintera.ai.litert.LiteRtEngineFactory"
 
-/** Jméno implementace nad llama.cpp (:client:ai-llamacpp); keep pravidlo pro R8 je v androidApp. */
-const val LLAMACPP_ENGINE_FACTORY = "eu.tintera.plume.ai.llamacpp.LlamaCppEngineFactory"
+/** Jméno implementace nad llama.cpp (:ai-llamacpp); keep pravidlo jako u [LITERT_ENGINE_FACTORY]. */
+const val LLAMACPP_ENGINE_FACTORY = "eu.tintera.ai.llamacpp.LlamaCppEngineFactory"
+
+/**
+ * Nativní knihovna llama.cpp (`libai_engine_llama.so`, `ai_engine_llama.dll`…), jak ji staví
+ * :ai-llamacpp-android a :ai-llamacpp-desktop. Na Androidu ji aplikace předává `PlayLiteRtRuntime`
+ * (načte se ze součásti z Google Play dřív než runtime), na desktopu podle ní `DesktopLiteRtPlatform`
+ * pozná, jestli je v balíčku.
+ */
+const val LLAMACPP_NATIVE_LIBRARY = "ai_engine_llama"

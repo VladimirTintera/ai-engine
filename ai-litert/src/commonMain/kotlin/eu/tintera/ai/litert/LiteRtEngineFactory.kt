@@ -1,4 +1,4 @@
-package eu.tintera.plume.ai.litert
+package eu.tintera.ai.litert
 
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
@@ -8,13 +8,13 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
-import eu.tintera.plume.ai.engine.LlmBackend
-import eu.tintera.plume.ai.engine.LlmContent
-import eu.tintera.plume.ai.engine.LlmConversation
-import eu.tintera.plume.ai.engine.LlmEngine
-import eu.tintera.plume.ai.engine.LlmEngineConfig
-import eu.tintera.plume.ai.engine.LlmEngineFactory
-import eu.tintera.plume.ai.engine.LlmSampling
+import eu.tintera.ai.engine.LlmBackend
+import eu.tintera.ai.engine.LlmContent
+import eu.tintera.ai.engine.LlmConversation
+import eu.tintera.ai.engine.LlmEngine
+import eu.tintera.ai.engine.LlmEngineConfig
+import eu.tintera.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LlmSampling
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.map
  * LiteRT-LM za rozhraním [LlmEngineFactory]. Jen překlad typů; co s enginem dělat (výběr
  * backendu, uvolňování, stahování modelu), řeší aplikace (`LiteRtOnDeviceAi`).
  *
- * Vytváří se reflexí podle jména ([eu.tintera.plume.ai.engine.LITERT_ENGINE_FACTORY]), proto
+ * Vytváří se reflexí podle jména ([eu.tintera.ai.engine.LITERT_ENGINE_FACTORY]), proto
  * veřejný konstruktor bez parametrů.
  */
 class LiteRtEngineFactory : LlmEngineFactory {

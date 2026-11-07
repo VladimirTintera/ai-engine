@@ -1,12 +1,12 @@
 package eu.tintera.ai.core
 
-import eu.tintera.plume.ai.engine.LITERT_ENGINE_FACTORY
-import eu.tintera.plume.ai.engine.LlmEngineFactory
+import eu.tintera.ai.engine.LITERT_ENGINE_FACTORY
+import eu.tintera.ai.engine.LlmEngineFactory
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Odkud se vezme runtime LiteRT-LM (:client:ai-litert). Na desktopu je přibalený, na Androidu je
- * to součást z Google Play stahovaná až na požádání (:client:litertFeature) — nativní knihovna
+ * Odkud se vezme runtime LiteRT-LM (:ai-litert). Na desktopu je přibalený, na Androidu je
+ * to součást z Google Play stahovaná až na požádání (v Plume :client:litertFeature) — nativní knihovna
  * má 23 MB a model v zařízení si zapne málokdo.
  *
  * Stahuje se SPOLU s modelem ([LiteRtOnDeviceAi.download]): dokud runtime chybí, model není
@@ -32,7 +32,7 @@ interface LiteRtRuntime {
 }
 
 /**
- * Implementace z :client:ai-litert podle jména. Reflexe, protože na Androidu leží v součásti,
+ * Implementace z :ai-litert podle jména. Reflexe, protože na Androidu leží v součásti,
  * na kterou základ aplikace při překladu nevidí; na desktopu kvůli tomu, že by modul nad
  * `shared` jinak tvořil kruh závislostí.
  */
