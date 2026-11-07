@@ -5,17 +5,17 @@ plugins {
 }
 
 /**
- * Nativní knihovna llama.cpp pro desktop (`libplume_llama.dylib` / `plume_llama.dll` /
- * `libplume_llama.so`) v jaru; kód nad ní je v :client:ai-llamacpp. Protějšek
- * :client:ai-llamacpp-android, ze stejného CMakeLists (`client/ai-llamacpp/src/main/cpp`).
+ * Nativní knihovna llama.cpp pro desktop (`libai_engine_llama.dylib` / `ai_engine_llama.dll` /
+ * `libai_engine_llama.so`) v jaru; kód nad ní je v :ai-llamacpp. Protějšek
+ * :ai-llamacpp-android, ze stejného CMakeLists (`ai-llamacpp/src/main/cpp`).
  *
- * - **Jen pro systém a architekturu, na kterých se staví** (jako TDLib a LiteRT-LM v desktopApp):
+ * - **Jen pro systém a architekturu, na kterých se staví** (jako TDLib a LiteRT-LM v desktopApp Plume):
  *   jpackage cizí systém zabalit neumí, takže macOS balíček vzniká na Macu, MSI na Windows.
- *   Knihovna leží v jaru pod `eu/tintera/plume/ai/llamacpp/native/<systém>-<arch>/`, odkud ji
+ *   Knihovna leží v jaru pod `eu/tintera/ai/llamacpp/native/<systém>-<arch>/`, odkud ji
  *   `LlamaNative` vybalí; co v jaru není, pozná `DesktopLiteRtPlatform` a model nenabídne.
  * - **CMake z Android SDK** (`cmake;<verze z libs.versions.toml>`, s ním i Ninja), stejný jako
  *   pro Android; jinak `cmake` z PATH. Překladač je systémový: Xcode Command Line Tools na Macu,
- *   MSVC na Windows (najde ho `vswhere`, statické CRT, jako toasty v :client:shared), GCC nebo
+ *   MSVC na Windows (najde ho `vswhere`, statické CRT, jako toasty v Plume :client:shared), GCC nebo
  *   Clang na Linuxu.
  * - **Bez submodulu, CMake nebo překladače se lokálně přeskočí** (desktop se přeloží i bez nich,
  *   jen EuroLLM nenabídne); **na CI (`CI`) je to chyba**, ať release nevyjde potichu bez modelu.
@@ -25,8 +25,8 @@ kotlin {
 }
 
 dependencies {
-    implementation(projects.client.aiLlamacpp)
-    testImplementation(projects.client.aiEngine)
+    implementation(project(":ai-llamacpp"))
+    testImplementation(project(":ai-engine"))
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.core)
 }
@@ -36,9 +36,9 @@ tasks.test {
     providers.gradleProperty("llamaCppTestModel").orNull?.let { systemProperty("llamaCppTestModel", it) }
 }
 
-val llamaCppDir = rootProject.layout.projectDirectory.dir("client/ai-llamacpp")
+val llamaCppDir = rootProject.layout.projectDirectory.dir("ai-llamacpp")
 
-/** Hlavičky JNI z toolchainu projektu, ne z JVM démona Gradle (viz `jniToolchainHome` v :client:shared). */
+/** Hlavičky JNI z toolchainu projektu, ne z JVM démona Gradle (viz `jniToolchainHome` v Plume :client:shared). */
 val jniHome: Provider<String> = javaToolchains
     .launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
     .map { it.metadata.installationPath.asFile.absolutePath }
@@ -71,7 +71,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
     val arm64 = System.getProperty("os.arch").lowercase().let { "aarch64" in it || "arm64" in it }
     // Složka jako u LiteRT-LM (`darwin-aarch64`, `windows-x86_64`…); čte ji `LlamaNative` i `DesktopLiteRtPlatform`.
     val platform = "$os-" + if (arm64) "aarch64" else "x86_64"
-    val library = System.mapLibraryName("plume_llama")
+    val library = System.mapLibraryName("ai_engine_llama")
 
     inputs.dir(sources)
     // Jen to, z čeho se knihovna skládá — celý submodul má tisíce souborů (testy, dokumentace).
@@ -83,7 +83,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
     outputs.dir(outputDir)
 
     doLast {
-        val out = outputDir.get().dir("eu/tintera/plume/ai/llamacpp/native/$platform").asFile
+        val out = outputDir.get().dir("eu/tintera/ai/llamacpp/native/$platform").asFile
         out.deleteRecursively()
         fun skip(message: String) {
             if (requireToolchain) throw GradleException(message)
@@ -113,7 +113,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
             add("-S"); add(sources.asFile.path)
             add("-B"); add(work.path)
             add("-DCMAKE_BUILD_TYPE=Release")
-            add("-DPLUME_JNI_INCLUDE_DIRS=$jdk/include;$jdk/include/$jniOs")
+            add("-DAI_ENGINE_JNI_INCLUDE_DIRS=$jdk/include;$jdk/include/$jniOs")
             if (sdkNinja != null) {
                 add("-G"); add("Ninja")
                 add("-DCMAKE_MAKE_PROGRAM=${sdkNinja.path}")
@@ -123,7 +123,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
             }
             if (os == "darwin") {
                 add("-DCMAKE_OSX_ARCHITECTURES=" + if (arm64) "arm64" else "x86_64")
-                // Jako `minimumSystemVersion` v desktopApp.
+                // Jako `minimumSystemVersion` v desktopApp Plume.
                 add("-DCMAKE_OSX_DEPLOYMENT_TARGET=" + if (arm64) "14.0" else "12.0")
             }
             if (os == "windows") {
@@ -131,7 +131,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
                 add("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded")
             }
         }
-        val build = listOf(cmake, "--build", work.path, "--target", "plume_llama", "--config", "Release", "--parallel")
+        val build = listOf(cmake, "--build", work.path, "--target", "ai_engine_llama", "--config", "Release", "--parallel")
 
         fun runCommand(command: List<String>): Pair<Int, String> {
             val process = try {

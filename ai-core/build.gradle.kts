@@ -12,10 +12,10 @@ plugins {
  * **Nic z Plume**: prompty, volba modelu pro úlohu, nastavení, texty a UI nese aplikace a co od
  * ní knihovna potřebuje (síť, notifikace stahování, dekódování zvuku, adresář modelů), dostane
  * přes rozhraní. Modul se přesune do knihovny ai-engine (balíčky `eu.tintera.ai.*`, Apache-2.0)
- * sdílené s dalšími aplikacemi, viz docs/poznatky/ai-v-zarizeni.md, „Modul :client:ai-core“.
+ * sdílené s dalšími aplikacemi, viz docs/poznatky/ai-v-zarizeni.md, „Modul :ai-core“.
  *
- * Runtime modelů (:client:ai-litert, :client:ai-llamacpp) tu není ani při překladu, jen jejich
- * rozhraní (:client:ai-engine); na Androidu jsou to součásti z Google Play, které deklaruje
+ * Runtime modelů (:ai-litert, :ai-llamacpp) tu není ani při překladu, jen jejich
+ * rozhraní (:ai-engine); na Androidu jsou to součásti z Google Play, které deklaruje
  * aplikace, na desktopu je přibalí vstupní bod.
  */
 kotlin {
@@ -29,6 +29,13 @@ kotlin {
         namespace = "eu.tintera.ai.core"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        // Keep pravidla pro R8 aplikace, která knihovnu použije (viz soubor).
+        optimization {
+            consumerKeepRules.apply {
+                publish = true
+                file("consumer-rules.pro")
+            }
+        }
     }
 
     iosArm64()
@@ -45,7 +52,7 @@ kotlin {
             dependsOn(commonMain.get())
             dependencies {
                 // `LiteRtRuntime.engines()` vrací továrnu z ai-engine.
-                api(projects.client.aiEngine)
+                api(project(":ai-engine"))
             }
         }
 

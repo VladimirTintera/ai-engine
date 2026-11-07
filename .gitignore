@@ -1,0 +1,14 @@
+*.iml
+.gradle
+/.idea
+.DS_Store
+**/build/
+/captures
+.kotlin
+.cxx
+
+# Path to the Android SDK. Never commit.
+local.properties
+
+# JVM crash logs
+hs_err_pid*.log

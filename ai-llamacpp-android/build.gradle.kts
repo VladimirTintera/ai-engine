@@ -3,22 +3,22 @@ plugins {
 }
 
 /**
- * Nativní knihovna llama.cpp pro Android (`libplume_llama.so`); kód nad ní je v :client:ai-llamacpp.
+ * Nativní knihovna llama.cpp pro Android (`libai_engine_llama.so`); kód nad ní je v :ai-llamacpp.
  *
- * - **llama.cpp je git submodul** (`client/ai-llamacpp/llama.cpp`, připnutý na vydání `bNNNNN`)
- *   a překládá se z NDK přes CMake (`client/ai-llamacpp/src/main/cpp`, totéž CMakeLists jako
- *   desktop v :client:ai-llamacpp-desktop). Žádný hotový wrapper z Maven: ty dělají jednotlivci
+ * - **llama.cpp je git submodul** (`ai-llamacpp/llama.cpp`, připnutý na vydání `bNNNNN`)
+ *   a překládá se z NDK přes CMake (`ai-llamacpp/src/main/cpp`, totéž CMakeLists jako
+ *   desktop v :ai-llamacpp-desktop). Žádný hotový wrapper z Maven: ty dělají jednotlivci
  *   a projekt by s nimi měl stejné riziko jako s wrapperem TDLib, jen bez hranice kolem.
- *   Bump = `git -C client/ai-llamacpp/llama.cpp fetch --depth 1 origin tag bNNNNN` a checkout.
+ *   Bump = `git -C ai-llamacpp/llama.cpp fetch --depth 1 origin tag bNNNNN` a checkout.
  * - **Samostatný Android modul jen kvůli nativnímu buildu** — KMP plugin pro Android nativní
  *   build z CMake neumí, a kód v Kotlinu sdílí s desktopem.
- * - **Do aplikace ho dává součást z Google Play** (:client:llamacppFeature), ne `shared`.
+ * - **Do aplikace ho dává součást z Google Play** (v Plume :client:llamacppFeature), ne `shared`.
  * - **Jen arm64-v8a a x86_64** (x86_64 kvůli emulátoru). Na 32bitových telefonech se model
- *   nenabízí a součást má pro jejich ABI prázdný soubor, viz client/llamacppFeature.
+ *   nenabízí a součást má pro jejich ABI prázdný soubor, viz Plume client/llamacppFeature.
  * - **NDK r28+ kvůli 16KB stránkám**, které Play od Androidu 15 vyžaduje u nativních knihoven.
  */
 android {
-    namespace = "eu.tintera.plume.ai.llamacpp"
+    namespace = "eu.tintera.ai.llamacpp"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
     ndkVersion = libs.versions.ndk.get()
 
@@ -54,5 +54,5 @@ kotlin {
 }
 
 dependencies {
-    implementation(projects.client.aiLlamacpp)
+    implementation(project(":ai-llamacpp"))
 }

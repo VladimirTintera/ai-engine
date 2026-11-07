@@ -1,0 +1,60 @@
+[versions]
+# AGP and Kotlin MUST match the consuming apps (Plume, grocery): this repository is used as an
+# `includeBuild`, and one Gradle build cannot load two versions of AGP. Bump them together.
+agp = "9.2.1"
+kotlin = "2.4.21"
+
+# Android
+android-compileSdk = "37"
+android-minSdk = "26"
+# Native build of llama.cpp (ai-llamacpp-android via CMake, ai-llamacpp-desktop). NDK r28+ aligns
+# native libraries to 16 KB pages, which Google Play requires; CMake from the Android SDK.
+ndk = "29.0.13846066"
+cmake = "3.31.0"
+
+kotlinx-coroutines = "1.11.0"
+kermit = "2.1.0"
+androidx-core = "1.19.0"
+# Background model download (`AiModelDownloadWorker`, subclassed by the app).
+work = "2.11.2"
+# Play Feature Delivery: model runtimes are on-demand modules installed from Google Play
+# (`PlayLiteRtRuntime`). Base artifact with the Task API only, no -ktx.
+playFeatureDelivery = "2.1.0"
+# Gemini Nano on device (AICore) via the ML Kit Prompt API. Beta, the API may change.
+# beta5 because of the preview variant: beta4 assigned AICore feature -1 to some requests and
+# silently ran the stable model (docs/on-device-ai.md).
+mlkitGenaiPrompt = "1.0.0-beta5"
+# Annotations and shape description for structured output (`GenerableProvider`). The KSP processor
+# is not used, providers are written by hand. The version `genai-prompt` asks for.
+mlkitGenaiSchema = "1.0.0-alpha2"
+# Gemma and Qwen via LiteRT-LM. Versions come from Google Maven (maven-metadata.xml); GitHub tags
+# do not match them. 0.19 because of Qwen3 4B, whose GPU path crashes older versions.
+litertlm = "0.19.1"
+# Gson STRICTLY below 2.14, otherwise Gemini Nano structured output crashes. LiteRT-LM 0.19.1 pulls
+# Gson 2.14.0, which added `com.google.gson.internal.bind.JavaTimeTypeAdapters`. The Gson bundled
+# (and relocated) in ML Kit `genai-prompt` looks that class up by its ORIGINAL name via
+# `Class.forName`, finds the foreign one and the cast fails with `ClassCastException` during class
+# initialisation. It only handles "not found", so with 2.13.x (no such class) it works. LiteRT-LM
+# only uses the tree API (`JsonParser`, `JsonObject`), which 2.13.2 has. Guarded by
+# `GsonForMlKitTest`; remove once ML Kit is fixed.
+gson = { strictly = "2.13.2" }
+
+[libraries]
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
+androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "work" }
+play-feature-delivery = { module = "com.google.android.play:feature-delivery", version.ref = "playFeatureDelivery" }
+mlkit-genai-prompt = { module = "com.google.mlkit:genai-prompt", version.ref = "mlkitGenaiPrompt" }
+mlkit-genai-schema = { module = "com.google.mlkit:genai-schema", version.ref = "mlkitGenaiSchema" }
+litertlm-android = { module = "com.google.ai.edge.litertlm:litertlm-android", version.ref = "litertlm" }
+litertlm-jvm = { module = "com.google.ai.edge.litertlm:litertlm-jvm", version.ref = "litertlm" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+
+[plugins]
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
+android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
