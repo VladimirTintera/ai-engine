@@ -47,7 +47,7 @@ kotlin {
     sourceSets {
         // Stahované modely (LiteRT-LM, llama.cpp): Android a desktop. Stahování, stav a engine
         // jsou společné, platforma je za `LiteRtPlatform`.
-        val liteRtMain by creating {
+        val liteRtMain = create("liteRtMain") {
             dependsOn(commonMain.get())
             dependencies {
                 // `LiteRtRuntime.engines()` vrací továrnu z ai-engine.
