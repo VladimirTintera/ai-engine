@@ -367,12 +367,21 @@ enum class LiteRtModel(
      * Patří soubor [name] z keše runtime k tomuhle modelu? LiteRT-LM si při prvním načtení
      * zkompiluje model pro procesor a uloží ho vedle (`<soubor>_<čas>_<velikost>.xnnpack_cache`,
      * u Gemmy navíc `….audio_adapter.xnnpack_cache` a `….static_audio_encoder.xnnpack_cache`).
+     * Pokus o GPU nechá i keš pro grafiku (`…_mldrift_weight_cache.bin` a
+     * `…_mldrift_program_cache.bin`), a to i když GPU nakonec selže a jede se na procesoru.
      * Keš je velká skoro jako model (Gemma 4 E4B 2,3 GB) a bez smazání s modelem zůstávala.
      */
-    fun ownsCacheFile(name: String): Boolean = name.startsWith("${fileName}_") && name.endsWith(CACHE_SUFFIX)
+    fun ownsCacheFile(name: String): Boolean =
+        name.startsWith("${fileName}_") && CACHE_SUFFIXES.any { name.endsWith(it) }
 }
 
-private const val CACHE_SUFFIX = ".xnnpack_cache"
+/** Přípony keší LiteRT-LM 0.19 (řetězce z `liblitertlm_jni.so`): procesor a GPU (ML Drift). */
+private val CACHE_SUFFIXES = listOf(
+    ".xnnpack_cache",
+    "_mldrift_weight_cache.bin",
+    "_mldrift_program_cache.bin",
+    "_mldrift_compiled_cache.bin",
+)
 
 /**
  * Model odpověděl, ale ne v požadovaném tvaru ([OnDeviceAi.generateStructured]): JSON, který

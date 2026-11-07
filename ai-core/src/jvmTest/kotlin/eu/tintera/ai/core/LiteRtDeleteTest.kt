@@ -37,6 +37,8 @@ class LiteRtDeleteTest {
             File(cache, "gemma-4-E4B-it.litertlm_1793947790_3659530240.xnnpack_cache"),
             File(cache, "gemma-4-E4B-it.litertlm_1793947790_3659530240.audio_adapter.xnnpack_cache"),
             File(models, "gemma-4-E4B-it.litertlm_1793947790_3659530240.xnnpack_cache"),
+            File(cache, "gemma-4-E4B-it.litertlm_1793947790_3659530240_mldrift_weight_cache.bin"),
+            File(cache, "gemma-4-E4B-it.litertlm_1793947790_3659530240_mldrift_program_cache.bin"),
             // Cizí: jiný model a jeho keš zůstávají.
             File(models, "gemma-4-E2B-it.litertlm"),
             File(cache, "gemma-4-E2B-it.litertlm_1793947572_2588147712.xnnpack_cache"),
