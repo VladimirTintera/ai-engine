@@ -14,6 +14,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Statické llama a ggml jdou do sdílené knihovny, takže musí být přeložené s -fPIC. NDK a macOS
+# ho dávají samy, GCC na Linuxu ne (linker skončí na „recompile with -fPIC").
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)

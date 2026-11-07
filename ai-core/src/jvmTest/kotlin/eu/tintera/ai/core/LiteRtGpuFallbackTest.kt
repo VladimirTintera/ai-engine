@@ -83,16 +83,24 @@ class LiteRtGpuFallbackTest {
 
     @Test
     fun chybaPoPrvnimTokenuSeNeopakuje() = runBlocking {
+        // Chyba až po tom, co sběrač přírůstek dostal: `generate` běží přes `flowOn`, a chyba
+        // hned po `emit` by sběrače zrušila dřív, než si přírůstek z bufferu vezme (na CI s dvěma
+        // jádry se to stávalo).
+        val received = CompletableDeferred<Unit>()
         engines.reply = {
             flow {
                 emit("Za")
+                received.await()
                 throw IllegalStateException("Model failed mid-answer")
             }
         }
 
         val emitted = mutableListOf<Generated>()
         val error = assertFailsWith<OnDeviceAiException> {
-            ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").collect { emitted += it }
+            ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").collect {
+                emitted += it
+                received.complete(Unit)
+            }
         }
 
         assertEquals(AiFailureReason.ModelError, error.reason)
