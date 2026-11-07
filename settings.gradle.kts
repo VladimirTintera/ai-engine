@@ -1,6 +1,9 @@
-// Same as the repository: a consuming build that uses it via `includeBuild` sees it under this name.
-// Type-safe project accessors are off on purpose: they would clash with the `:ai-engine` module.
-rootProject.name = "ai-engine"
+// NOT "ai-engine": type-safe project accessors name the root project accessor after it, which would
+// clash with the `:ai-engine` module (`getAiEngine()` twice). This build does not enable them, but
+// feature previews apply to the whole build tree, so a consuming app that enables
+// TYPESAFE_PROJECT_ACCESSORS (Plume, grocery) turns them on here too when it uses this repository
+// via `includeBuild`. The included build is still called after its directory (`ai-engine`).
+rootProject.name = "ai-engine-root"
 
 pluginManagement {
     repositories {
