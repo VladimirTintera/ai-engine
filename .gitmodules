@@ -1,0 +1,4 @@
+[submodule "ai-llamacpp/llama.cpp"]
+	path = ai-llamacpp/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp
+	shallow = true
