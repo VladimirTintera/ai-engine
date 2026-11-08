@@ -10,7 +10,7 @@ import android.os.PowerManager
  * o gigabajtech, který by se teprve načítal, je přesně to, co se pak má odložit — dál
  * (`SEVERE`) už telefon citelně zpomaluje i bez nás.
  *
- * Bez naslouchání změnám: [strained] se čte těsně před tím, než by se Gemma pustila.
+ * Bez naslouchání změnám: [strained] se čte těsně před tím, než by se model pustil.
  */
 class AndroidDeviceLoad(context: Context) : DeviceLoad {
     private val power = context.getSystemService(PowerManager::class.java)

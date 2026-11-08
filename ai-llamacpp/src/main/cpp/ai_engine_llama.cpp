@@ -90,7 +90,7 @@ size_t completeUtf8Prefix(const std::string &text) {
     return i;
 }
 
-/** Prompt v šabloně modelu; neznámou šablonu nahradí ChatML, které EuroLLM i Qwen používají. */
+/** Prompt v šabloně modelu; neznámou šablonu nahradí ChatML, které používá většina modelů. */
 std::string applyTemplate(const llama_model *model, const std::string &prompt) {
     llama_chat_message message{"user", prompt.c_str()};
     const char *tmpl = llama_model_chat_template(model, nullptr);

@@ -13,6 +13,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /**
  * GPU, které se načte bez chyby a selže až při generování (bez OpenCL), nahradí CPU
@@ -38,20 +40,24 @@ class LiteRtGpuFallbackTest {
     private val platform = object : LiteRtPlatform {
         override val modelsDir = models
         override val cacheDir = File(root, "ai-cache")
-        override fun canRun(model: LiteRtModel) = true
+        override fun canRun(model: DownloadedModel) = true
         override fun gpu(runtime: ModelRuntime) = runtime in gpuRuntimes
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()
-        override fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {}
-        override fun cancelDownload(model: LiteRtModel) {}
-        override suspend fun downloadPending(model: LiteRtModel) = false
+        override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {}
+        override fun cancelDownload(model: DownloadedModel) {}
+        override suspend fun downloadPending(model: DownloadedModel) = false
     }
+
+    private val litert = testModel("litert")
+    private val other = testModel("other")
+    private val gguf = testModel("gguf", ModelRuntime.LlamaCpp)
 
     private val engines = FakeEngines()
     private val ai = LiteRtOnDeviceAi(platform, { FakeLiteRtRuntime(engines = engines) }, AlwaysOnline)
 
     init {
-        listOf(LiteRtModel.E4B, LiteRtModel.Qwen3_4B, LiteRtModel.EuroMoe2_6B).forEach { File(models, it.fileName).writeText("x") }
+        listOf(other, litert, gguf).forEach { File(models, it.fileName).writeText("x") }
     }
 
     @AfterTest
@@ -63,7 +69,7 @@ class LiteRtGpuFallbackTest {
     fun gpuSelzePredPrvnimTokenem_dotazSeZopakujeNaCpu() = runBlocking {
         engines.reply = { backend -> if (backend == LlmBackend.Gpu) noOpenCl() else flowOf("Ahoj", " světe") }
 
-        val result = ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").last()
+        val result = ai.generate(litert.variant, "Shrň").last()
 
         assertEquals("Ahoj světe", result.text)
         assertEquals(listOf(LlmBackend.Gpu, LlmBackend.Cpu), engines.opened.map { it.backend })
@@ -73,10 +79,10 @@ class LiteRtGpuFallbackTest {
     @Test
     fun poNahradeSeGpuDoKonceProcesuNezkousi() = runBlocking {
         engines.reply = { backend -> if (backend == LlmBackend.Gpu) noOpenCl() else flowOf("ok") }
-        ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").last()
+        ai.generate(litert.variant, "Shrň").last()
 
         // Jiný model zavře ten první a načte se znovu — rovnou na CPU.
-        ai.generate(LiteRtModel.E4B.variant, "Shrň").last()
+        ai.generate(other.variant, "Shrň").last()
 
         assertEquals(listOf(LlmBackend.Gpu, LlmBackend.Cpu, LlmBackend.Cpu), engines.opened.map { it.backend })
     }
@@ -97,7 +103,7 @@ class LiteRtGpuFallbackTest {
 
         val emitted = mutableListOf<Generated>()
         val error = assertFailsWith<OnDeviceAiException> {
-            ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").collect {
+            ai.generate(litert.variant, "Shrň").collect {
                 emitted += it
                 received.complete(Unit)
             }
@@ -118,7 +124,7 @@ class LiteRtGpuFallbackTest {
             }
         }
 
-        val job = launch(Dispatchers.Default) { ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").collect {} }
+        val job = launch(Dispatchers.Default) { ai.generate(litert.variant, "Shrň").collect {} }
         sending.await()
         job.cancel()
         job.join()
@@ -132,7 +138,7 @@ class LiteRtGpuFallbackTest {
         engines.reply = { backend -> flow { throw IllegalArgumentException("$backend: input too long") } }
 
         val error = assertFailsWith<OnDeviceAiException> {
-            ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").toList()
+            ai.generate(litert.variant, "Shrň").toList()
         }
         // Ven jde chyba z CPU, ta z GPU je u ní. Korutiny při obnově stack trace výjimku
         // zkopírují a původní dají za příčinu, proto se hledá v celém řetězu.
@@ -141,7 +147,7 @@ class LiteRtGpuFallbackTest {
         assertEquals(listOf("Gpu: input too long"), causes.flatMap { it.suppressed.toList() }.map { it.message }.distinct())
 
         engines.reply = { flowOf("ok") }
-        ai.generate(LiteRtModel.E4B.variant, "Shrň").last()
+        ai.generate(other.variant, "Shrň").last()
 
         assertEquals(listOf(LlmBackend.Gpu, LlmBackend.Cpu, LlmBackend.Gpu), engines.opened.map { it.backend })
     }
@@ -151,8 +157,8 @@ class LiteRtGpuFallbackTest {
         engines.failOpen = { it == LlmBackend.Gpu }
         engines.reply = { flowOf("ok") }
 
-        ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").last()
-        ai.generate(LiteRtModel.E4B.variant, "Shrň").last()
+        ai.generate(litert.variant, "Shrň").last()
+        ai.generate(other.variant, "Shrň").last()
 
         assertEquals(listOf(LlmBackend.Gpu, LlmBackend.Cpu, LlmBackend.Cpu), engines.attempts)
     }
@@ -161,7 +167,7 @@ class LiteRtGpuFallbackTest {
     fun runtimeBezGpu_seNaciteRovnouNaCpu() = runBlocking {
         engines.reply = { flowOf("ok") }
 
-        ai.generate(LiteRtModel.EuroMoe2_6B.variant, "Shrň").last()
+        ai.generate(gguf.variant, "Shrň").last()
 
         assertEquals(listOf(LlmBackend.Cpu), engines.attempts)
     }
@@ -172,13 +178,33 @@ class LiteRtGpuFallbackTest {
         gpuRuntimes = setOf(ModelRuntime.LiteRt, ModelRuntime.LlamaCpp)
         engines.failOpen = { it == LlmBackend.Gpu }
         engines.reply = { flowOf("ok") }
-        ai.generate(LiteRtModel.EuroMoe2_6B.variant, "Shrň").last()
+        ai.generate(gguf.variant, "Shrň").last()
 
         engines.failOpen = { false }
-        ai.generate(LiteRtModel.Qwen3_4B.variant, "Shrň").last()
-        ai.generate(LiteRtModel.EuroMoe2_6B.variant, "Shrň").last()
+        ai.generate(litert.variant, "Shrň").last()
+        ai.generate(gguf.variant, "Shrň").last()
 
         assertEquals(listOf(LlmBackend.Gpu, LlmBackend.Cpu, LlmBackend.Gpu, LlmBackend.Cpu), engines.attempts)
+    }
+
+    /** Prodlevu před uvolněním aplikace určuje podle modelu; čte se po každém použití. */
+    @Test
+    fun prodlevaUvolneniSePtaNaModel() = runBlocking {
+        engines.reply = { flowOf("ok") }
+        val asked = CompletableDeferred<DownloadedModel>()
+        val ai = LiteRtOnDeviceAi(
+            platform,
+            { FakeLiteRtRuntime(engines = engines) },
+            AlwaysOnline,
+            idleUnloadMs = { model ->
+                asked.complete(model)
+                60_000
+            },
+        )
+
+        ai.generate(litert.variant, "Shrň").last()
+
+        assertEquals(litert, withTimeout(5.seconds) { asked.await() })
     }
 
     /** Tak to hlásí LiteRT-LM 0.19.1 na zařízení bez OpenCL, až z `onError` konverzace. */

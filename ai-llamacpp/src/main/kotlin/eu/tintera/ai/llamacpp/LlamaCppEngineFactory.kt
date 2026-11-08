@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * llama.cpp (modely GGUF, třeba EuroLLM) za rozhraním [LlmEngineFactory]. Jen text.
+ * llama.cpp (modely GGUF) za rozhraním [LlmEngineFactory]. Jen text.
  * Týž kód na Androidu i desktopu; liší se jen původ nativní knihovny ([LlamaNative.loadLibrary])
  * a počet vláken ([threads]).
  *
@@ -29,7 +29,7 @@ import kotlinx.coroutines.flow.flow
  *   nemá, [open] vyhodí dřív, než začne načítat, a aplikace načte CPU. Selhání GPU si aplikace
  *   pamatuje pro každý runtime zvlášť (`gpuFailed` v `LiteRtOnDeviceAi`), takže Metal v llama.cpp
  *   nevezme GPU Gemmě v LiteRT-LM.
- * - **Zvuk a obraz neumí** (engine s nimi se neotevře); EuroLLM je jen textový model.
+ * - **Zvuk a obraz neumí** (engine s nimi se neotevře).
  */
 class LlamaCppEngineFactory : LlmEngineFactory {
 

@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
  *   nemá vůbec. **A jen na Javě 21+** ([javaSupported]): `litertlm-jvm` je pro ni přeložený
  *   a na starší by se model nabídl, ale při prvním použití selhal (aplikace proto musí běžet
  *   na JDK 21; Plume ho balí, `runtimeLauncher` v desktopApp Plume).
- * - **EuroLLM (llama.cpp) taky jen s knihovnou v balíčku** ([llamaCppBundled], přeloží ji
+ * - **Modely GGUF (llama.cpp) taky jen s knihovnou v balíčku** ([llamaCppBundled], přeloží ji
  *   :ai-llamacpp-desktop) **a jen na procesoru, pro který je přeložená**
  *   ([llamaCppCpuSupported]) — jinak by první shrnutí shodilo celou aplikaci na SIGILL.
  *   Na Macu s Apple Silicon počítá na GPU přes Metal ([gpu]).
@@ -51,13 +51,13 @@ class DesktopLiteRtPlatform(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val downloads = ConcurrentHashMap<LiteRtModel, Job>()
+    private val downloads = ConcurrentHashMap<DownloadedModel, Job>()
 
     override val modelsDir: File get() = File(localDirectory, MODELS_DIR)
 
     override val cacheDir: File get() = File(localDirectory, CACHE_DIR)
 
-    override fun canRun(model: LiteRtModel): Boolean {
+    override fun canRun(model: DownloadedModel): Boolean {
         val runtime = when (model.runtime) {
             ModelRuntime.LiteRt -> javaSupported && nativeLibraryBundled
             ModelRuntime.LlamaCpp -> llamaCppBundled && llamaCppCpuSupported
@@ -113,7 +113,7 @@ class DesktopLiteRtPlatform(
     }
 
     /** [unmeteredOnly] se přejde: druh sítě JVM nehlásí a aplikace volbu na desktopu nemá nabízet. */
-    override fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
+    override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
         downloads.compute(model) { _, running ->
             running?.takeIf { it.isActive } ?: scope.launch {
                 try {
@@ -128,11 +128,11 @@ class DesktopLiteRtPlatform(
         }
     }
 
-    override fun cancelDownload(model: LiteRtModel) {
+    override fun cancelDownload(model: DownloadedModel) {
         downloads.remove(model)?.cancel()
     }
 
-    override suspend fun downloadPending(model: LiteRtModel): Boolean = downloads[model]?.isActive == true
+    override suspend fun downloadPending(model: DownloadedModel): Boolean = downloads[model]?.isActive == true
 
     private fun totalMemoryBytes(): Long =
         (ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean)?.totalMemorySize ?: 0L

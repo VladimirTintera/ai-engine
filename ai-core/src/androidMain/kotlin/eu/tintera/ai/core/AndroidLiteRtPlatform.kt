@@ -10,7 +10,7 @@ import java.io.File
  * ([AiModelDownloadWorker], podtřída [worker] od aplikace), obraz přes `BitmapFactory`
  * ([ImageInput]) a zvuk dekodérem od aplikace ([audio]).
  *
- * Nenabízí se pod Androidem 12 ([MIN_SDK]), bez arm64 a pod [LiteRtModel.minMemoryGb].
+ * Nenabízí se pod Androidem 12 ([MIN_SDK]), bez arm64 a pod [DownloadedModel.minMemoryGb].
  */
 class AndroidLiteRtPlatform(
     private val context: Context,
@@ -28,7 +28,7 @@ class AndroidLiteRtPlatform(
 
     override val cacheDir: File get() = context.cacheDir
 
-    override fun canRun(model: LiteRtModel): Boolean {
+    override fun canRun(model: DownloadedModel): Boolean {
         if (Build.VERSION.SDK_INT < MIN_SDK) return false
         if ("arm64-v8a" !in Build.SUPPORTED_ABIS) return false
         val memory = ActivityManager.MemoryInfo()
@@ -42,24 +42,24 @@ class AndroidLiteRtPlatform(
     override fun wavClips(path: String): List<ByteArray> = audio.wavClips(path)
 
     /** Úloha si runtime vezme od aplikace a stáhne model sama; [run] se tu nevolá. */
-    override fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
+    override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
         downloads.enqueue(model, unmeteredOnly)
     }
 
-    override fun setDownloadNetwork(model: LiteRtModel, unmeteredOnly: Boolean) {
+    override fun setDownloadNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {
         downloads.updateNetwork(model, unmeteredOnly)
     }
 
-    override fun cancelDownload(model: LiteRtModel) {
+    override fun cancelDownload(model: DownloadedModel) {
         downloads.cancel(model)
     }
 
-    override suspend fun downloadPending(model: LiteRtModel): Boolean = downloads.isPending(model)
+    override suspend fun downloadPending(model: DownloadedModel): Boolean = downloads.isPending(model)
 
     private companion object {
         const val MODELS_DIR = "ai-models"
 
-        /** Gallery, ze které je katalog modelů, jede od Androidu 12; níž to nikdo neověřil. */
+        /** Google AI Edge Gallery jede od Androidu 12; níž to nikdo neověřil. */
         const val MIN_SDK = 31
 
         const val GIB = 1024.0 * 1024 * 1024

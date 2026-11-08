@@ -67,8 +67,16 @@ abstract class AiModelDownloadWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(context, params) {
 
-    /** Co úloha potřebuje od aplikace. [ai] musí být TÁŽ instance, jejíž stav ukazuje obrazovka. */
-    class Dependencies(val ai: LiteRtOnDeviceAi, val notifications: ModelDownloadNotifications)
+    /**
+     * Co úloha potřebuje od aplikace. [ai] musí být TÁŽ instance, jejíž stav ukazuje obrazovka.
+     * [modelById] najde model z katalogu aplikace podle [DownloadedModel.id]: po zabití procesu
+     * zbude úloze jen to; neznámé id (`null`, model z katalogu zmizel) úlohu ukončí se selháním.
+     */
+    class Dependencies(
+        val ai: LiteRtOnDeviceAi,
+        val notifications: ModelDownloadNotifications,
+        val modelById: (String) -> DownloadedModel?,
+    )
 
     /**
      * Runtime a notifikace z aplikace (typicky z DI); `null` = aplikace ještě není připravená
@@ -90,7 +98,7 @@ abstract class AiModelDownloadWorker(
         val dependencies = dependencies() ?: return Result.failure()
         val ai = dependencies.ai
         notifications = dependencies.notifications
-        val model = inputData.getString(ModelDownloadScheduler.KEY_MODEL)?.let { name -> LiteRtModel.entries.find { it.name == name } }
+        val model = inputData.getString(ModelDownloadScheduler.KEY_MODEL)?.let(dependencies.modelById)
             ?: return Result.failure()
         val channel = notifications.channel(applicationContext)
 
@@ -124,7 +132,7 @@ abstract class AiModelDownloadWorker(
         }
     }
 
-    private suspend fun showProgress(model: LiteRtModel, channel: String, progress: ModelDownload) {
+    private suspend fun showProgress(model: DownloadedModel, channel: String, progress: ModelDownload) {
         val percent = progress.fraction?.let { (it * 100).toInt() } ?: -1
         val key = percent to progress.waitingForNetwork
         if (key == shown) return
@@ -149,7 +157,7 @@ abstract class AiModelDownloadWorker(
         notify(info.notificationId, info.notification)
     }
 
-    private suspend fun foregroundInfo(model: LiteRtModel, channel: String, progress: ModelDownload, percent: Int): ForegroundInfo {
+    private suspend fun foregroundInfo(model: DownloadedModel, channel: String, progress: ModelDownload, percent: Int): ForegroundInfo {
         val notification = NotificationCompat.Builder(applicationContext, channel)
             .setSmallIcon(notifications.smallIcon)
             .setContentTitle(notifications.progressTitle(model))
@@ -168,7 +176,7 @@ abstract class AiModelDownloadWorker(
                 WorkManager.getInstance(applicationContext).createCancelPendingIntent(id),
             )
             .build()
-        val notificationId = PROGRESS_NOTIFICATION_ID + model.ordinal
+        val notificationId = PROGRESS_NOTIFICATION_ID + model.notificationOffset
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -180,15 +188,15 @@ abstract class AiModelDownloadWorker(
      * Notifikace průběhu po zastavení. Službu v popředí uklidí WorkManager sám; tohle je pro
      * případ, kdy úloha běžela bez ní a notifikaci ukazovala sama.
      */
-    private fun hideProgress(model: LiteRtModel) {
-        if (!foreground) NotificationManagerCompat.from(applicationContext).cancel(PROGRESS_NOTIFICATION_ID + model.ordinal)
+    private fun hideProgress(model: DownloadedModel) {
+        if (!foreground) NotificationManagerCompat.from(applicationContext).cancel(PROGRESS_NOTIFICATION_ID + model.notificationOffset)
     }
 
     /**
      * Výsledek, i když je aplikace zavřená: kdo stahování spustil a odešel, se jinak nedozví,
      * že model je připravený — nebo že se stahování zastavilo a čeká na něj.
      */
-    private suspend fun notifyResult(model: LiteRtModel, channel: String, error: Exception?) {
+    private suspend fun notifyResult(model: DownloadedModel, channel: String, error: Exception?) {
         hideProgress(model)
         val (title, text) = notifications.result(model, error)
         val notification = NotificationCompat.Builder(applicationContext, channel)
@@ -199,7 +207,7 @@ abstract class AiModelDownloadWorker(
             .setAutoCancel(true)
             .setContentIntent(openApp())
             .build()
-        notify(RESULT_NOTIFICATION_ID + model.ordinal, notification)
+        notify(RESULT_NOTIFICATION_ID + model.notificationOffset, notification)
     }
 
     private fun notify(id: Int, notification: Notification) {
@@ -224,6 +232,9 @@ abstract class AiModelDownloadWorker(
         return PendingIntent.getActivity(applicationContext, OPEN_APP_REQUEST_CODE, intent, PendingIntent.FLAG_IMMUTABLE)
     }
 
+    /** Vlastní notifikace pro každý model; z id, takže stejná i po restartu procesu. */
+    private val DownloadedModel.notificationOffset: Int get() = id.hashCode() and 0xFFFF
+
     private companion object {
         /** Oddělené od notifikací zpráv (ty mají id skupin TDLib, malá kladná čísla). */
         const val PROGRESS_NOTIFICATION_ID = 0x6A10_0000
@@ -240,13 +251,13 @@ class ModelDownloadScheduler(context: Context, private val worker: Class<out AiM
 
     private val context = context.applicationContext
 
-    private fun workName(model: LiteRtModel) = "ai-model-download-${model.name}"
+    private fun workName(model: DownloadedModel) = "ai-model-download-${model.id}"
 
     /**
      * `KEEP`: běžící i naplánovaná úloha (třeba čekající na síť) zůstává, druhá by stahovala
      * do téhož `.part` souběžně. Dokončená nebo zrušená úloha `KEEP` neblokuje.
      */
-    fun enqueue(model: LiteRtModel, unmeteredOnly: Boolean) {
+    fun enqueue(model: DownloadedModel, unmeteredOnly: Boolean) {
         WorkManager.getInstance(context).enqueueUniqueWork(workName(model), ExistingWorkPolicy.KEEP, request(model, unmeteredOnly))
     }
 
@@ -257,7 +268,7 @@ class ModelDownloadScheduler(context: Context, private val worker: Class<out AiM
      * dat rozběhne hned. **Běžící úlohu ale nová podmínka nezastaví** (platí až pro příští běh)
      * — to, že po zákazu dat na mobilu přestane, zařídí [LiteRtOnDeviceAi.setDownloadNetwork] sám.
      */
-    fun updateNetwork(model: LiteRtModel, unmeteredOnly: Boolean) {
+    fun updateNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {
         val manager = WorkManager.getInstance(context)
         val pending = manager.getWorkInfosForUniqueWork(workName(model)).get().firstOrNull { !it.state.isFinished } ?: return
         manager.updateWork(request(model, unmeteredOnly, id = pending.id))
@@ -268,9 +279,9 @@ class ModelDownloadScheduler(context: Context, private val worker: Class<out AiM
      * systém vede jako placenou, a právě o tu jde. Po návratu takové sítě se úloha rozběhne
      * sama, stejně jako po výpadku připojení.
      */
-    private fun request(model: LiteRtModel, unmeteredOnly: Boolean, id: UUID? = null) =
+    private fun request(model: DownloadedModel, unmeteredOnly: Boolean, id: UUID? = null) =
         OneTimeWorkRequest.Builder(worker)
-            .setInputData(workDataOf(KEY_MODEL to model.name))
+            .setInputData(workDataOf(KEY_MODEL to model.id))
             .setConstraints(
                 Constraints(requiredNetworkType = if (unmeteredOnly) NetworkType.UNMETERED else NetworkType.CONNECTED),
             )
@@ -280,12 +291,12 @@ class ModelDownloadScheduler(context: Context, private val worker: Class<out AiM
             .apply { if (id != null) setId(id) }
             .build()
 
-    fun cancel(model: LiteRtModel) {
+    fun cancel(model: DownloadedModel) {
         WorkManager.getInstance(context).cancelUniqueWork(workName(model))
     }
 
     /** Je úloha naplánovaná nebo běží? Po zabití procesu ji WorkManager spustí sám. */
-    suspend fun isPending(model: LiteRtModel): Boolean =
+    suspend fun isPending(model: DownloadedModel): Boolean =
         WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(workName(model)).first()
             .any { !it.state.isFinished }
 
@@ -307,7 +318,7 @@ interface ModelDownloadNotifications {
     suspend fun channel(context: Context): String
 
     /** Název notifikace průběhu. */
-    suspend fun progressTitle(model: LiteRtModel): String
+    suspend fun progressTitle(model: DownloadedModel): String
 
     /** Text pod ním: průběh v bajtech, nebo čekání na síť; `null` = bez textu (velikost neznámá). */
     suspend fun progressText(progress: ModelDownload): String?
@@ -316,5 +327,5 @@ interface ModelDownloadNotifications {
     suspend fun stopAction(): String
 
     /** Název a text notifikace o konci; [error] `null` = model je připravený. */
-    suspend fun result(model: LiteRtModel, error: Exception?): Pair<String, String>
+    suspend fun result(model: DownloadedModel, error: Exception?): Pair<String, String>
 }

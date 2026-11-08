@@ -38,17 +38,21 @@ class MlKitOnDeviceAi : OnDeviceAi {
 
     private val logger = Logger.withTag("OnDeviceAi")
 
-    private val clients = ConcurrentHashMap<ModelVariant, GenerativeModel>()
+    private val clients = ConcurrentHashMap<ModelVariant.GeminiNano, GenerativeModel>()
 
-    private fun client(variant: ModelVariant): GenerativeModel = clients.getOrPut(variant) {
-        Generation.getClient(
-            generationConfig {
-                modelConfig = modelConfig {
-                    releaseStage = if (variant.preview) ModelReleaseStage.PREVIEW else ModelReleaseStage.STABLE
-                    preference = if (variant.fast) ModelPreference.FAST else ModelPreference.FULL
-                }
-            },
-        )
+    private fun client(variant: ModelVariant): GenerativeModel {
+        // Jiná varianta se sem dostat nemá (směrovač ji pošle jinam); když ano, dostane výchozí model.
+        val nano = variant as? ModelVariant.GeminiNano ?: ModelVariant.GeminiNano()
+        return clients.getOrPut(nano) {
+            Generation.getClient(
+                generationConfig {
+                    modelConfig = modelConfig {
+                        releaseStage = if (nano.preview) ModelReleaseStage.PREVIEW else ModelReleaseStage.STABLE
+                        preference = if (nano.fast) ModelPreference.FAST else ModelPreference.FULL
+                    }
+                },
+            )
+        }
     }
 
     override suspend fun status(variant: ModelVariant): OnDeviceAiStatus = try {
@@ -120,7 +124,7 @@ class MlKitOnDeviceAi : OnDeviceAi {
         }
     }.catch { e ->
         // CancellationException `catch` na toku nechytá — zrušení projde, jak má.
-        throw if (e is Exception) e.toAiFailure() else e
+        throw if (e is Exception) e.toAiFailure(variant) else e
     }
 
     /** Strukturovaný výstup spadl na `LinkageError` (viz [generateStructured]) — do konce procesu jen text. */
@@ -147,9 +151,9 @@ class MlKitOnDeviceAi : OnDeviceAi {
         } catch (e: CancellationException) {
             throw e
         } catch (e: GenAiException) {
-            throw if (e.errorCode in STRUCTURED_OUTPUT_ERRORS) StructuredOutputException(e.errorCode, e) else e.toAiFailure()
+            throw if (e.errorCode in STRUCTURED_OUTPUT_ERRORS) StructuredOutputException(e.errorCode, e) else e.toAiFailure(variant)
         } catch (e: Exception) {
-            throw e.toAiFailure()
+            throw e.toAiFailure(variant)
         } catch (e: LinkageError) {
             /*
              * Strukturovaný výstup si v ML Kitu inicializuje vlastní kopii Gsonu a ta umí spadnout
@@ -192,7 +196,7 @@ class MlKitOnDeviceAi : OnDeviceAi {
      * (na Foldu `5` = COMPUTE_ERROR, když modelu chyběl soubor), je [AiFailureReason.ModelError]
      * — i s číslem, ať je v hlášení vidět.
      */
-    private fun Exception.toAiFailure(): OnDeviceAiException {
+    private fun Exception.toAiFailure(variant: ModelVariant): OnDeviceAiException {
         val code = (this as? GenAiException)?.errorCode
         val reason = when (code) {
             GenAiException.ErrorCode.BUSY,
@@ -209,7 +213,7 @@ class MlKitOnDeviceAi : OnDeviceAi {
             -> AiFailureReason.Unavailable
             else -> AiFailureReason.ModelError
         }
-        return OnDeviceAiException(reason, AiProvider.GeminiNano, code, this)
+        return OnDeviceAiException(reason, variant, code, this)
     }
 
     private companion object {

@@ -67,13 +67,13 @@ object IosOnDeviceModel {
 }
 
 /**
- * [OnDeviceAi] nad Apple Intelligence ([AiProvider.Apple]).
+ * [OnDeviceAi] nad Apple Intelligence ([ModelVariant.Apple]).
  *
  * - **Systémový model jako Gemini Nano**: stahuje a aktualizuje ho iOS, aplikace nic nestahuje
  *   ani nemaže ([download] je prázdný). Vypnutá Apple Intelligence nebo model, který systém
  *   teprve stahuje, se hlásí jako [OnDeviceAiStatus.Unsupported] — sekce AI se pak nenabídne
  *   (nastavení na ni nemá stav „zapni si ji v systému"; poznatek v `ai-v-zarizeni.md`).
- * - **Ostatní poskytovatelé tu nejsou**: Gemini Nano i Gemma hlásí [OnDeviceAiStatus.Unsupported],
+ * - **Ostatní modely tu nejsou**: Gemini Nano i stahované hlásí [OnDeviceAiStatus.Unsupported],
  *   takže nastavení samo přepne volbu na Apple (`supportedModels`).
  * - **Strukturovaný výstup, přepis řeči a popis obrázků zatím ne** (výchozí `false` rozhraní):
  *   Foundation Models je umí (`@Generable`), ale každý by chtěl vlastní Swift most.
@@ -83,7 +83,7 @@ class AppleOnDeviceAi(private val model: OnDeviceTextModel) : OnDeviceAi {
     private val logger = Logger.withTag("OnDeviceAi")
 
     override suspend fun status(variant: ModelVariant): OnDeviceAiStatus {
-        if (variant.provider != AiProvider.Apple) return OnDeviceAiStatus.Unsupported
+        if (variant != ModelVariant.Apple) return OnDeviceAiStatus.Unsupported
         return when (val state = model.availability()) {
             OnDeviceTextStatus.READY -> OnDeviceAiStatus.Ready
             else -> {
@@ -94,7 +94,7 @@ class AppleOnDeviceAi(private val model: OnDeviceTextModel) : OnDeviceAi {
     }
 
     override suspend fun info(variant: ModelVariant): ModelInfo? =
-        if (variant.provider == AiProvider.Apple) ModelInfo(name = MODEL_NAME, tokenLimit = model.contextSize()) else null
+        if (variant == ModelVariant.Apple) ModelInfo(name = MODEL_NAME, tokenLimit = model.contextSize()) else null
 
     override fun download(variant: ModelVariant, mobileData: Boolean): Flow<ModelDownload> = emptyFlow()
 
@@ -122,7 +122,7 @@ class AppleOnDeviceAi(private val model: OnDeviceTextModel) : OnDeviceAi {
             else -> AiFailureReason.ModelError
         }
         if (reason == AiFailureReason.ModelError) logger.w { "Apple Intelligence selhala: $code" }
-        return OnDeviceAiException(reason, AiProvider.Apple)
+        return OnDeviceAiException(reason, ModelVariant.Apple)
     }
 
     private companion object {

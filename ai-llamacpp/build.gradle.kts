@@ -3,7 +3,7 @@ plugins {
 }
 
 /**
- * Modely GGUF (EuroLLM a další, které LiteRT-LM neumí) přes llama.cpp: implementace
+ * Modely GGUF (které LiteRT-LM neumí) přes llama.cpp: implementace
  * [eu.tintera.ai.engine.LlmEngineFactory]. Jediné místo s llama.cpp — submodul
  * (`llama.cpp/`), vlastní JNI most i CMakeLists (`src/main/cpp`) jsou tady.
  *

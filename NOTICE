@@ -35,17 +35,11 @@ licensed under the Apache License, Version 2.0.
 Models
 -------------------------------------------------------------------------------
 
-No model weights are included in or distributed with this repository. The model
-catalog (LiteRtModel) only points to files that the app downloads on the user's
-request from their original hosts (Hugging Face). Each model has its own license,
-which the user accepts by downloading it, for example:
-
-  - Gemma (Google): the license stated on the model card
-  - Qwen3, Qwen2.5 1.5B (Alibaba Cloud): Apache License 2.0
-  - EuroLLM, EuroMoE (utter-project): Apache License 2.0
-  - Aya Expanse 8B (Cohere Labs): CC BY-NC 4.0 and the Cohere Labs Acceptable Use
-    Policy, non-commercial use only, with attribution. Apps that offer it must
-    show the license to the user before the download.
+No model weights are included in or distributed with this repository, and it
+does not name any downloadable model. The catalog is supplied by the app, which
+downloads the files on the user's request from their original hosts. Each model
+has its own license; the app that offers a model is responsible for honoring it,
+for example by showing it to the user before the download where it requires that.
 
 Apple Foundation Models (iOS 26+) are part of the operating system and are used
 through the app's own Swift bridge.

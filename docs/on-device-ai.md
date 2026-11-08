@@ -5,13 +5,14 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
 
 ## Providers and routing
 
-- `OnDeviceAi` is the only boundary the app talks to. A `ModelVariant` carries the provider
-  (`AiProvider`: Gemini Nano, Gemma, Qwen, EuroLLM, Aya, Apple) and the model choice per provider.
-  `RoutingOnDeviceAi` sends each call to the provider of the variant and **normalises** the variant
-  first (ML Kit keeps one client per variant; a different Gemma choice must not create a second
-  Gemini Nano client).
-- The app decides which variant handles which task. The library knows nothing about tasks.
-- Failures are typed: `OnDeviceAiException(reason, provider, code)` with `AiFailureReason` and
+- `OnDeviceAi` is the only boundary the app talks to. `ModelVariant` is a sealed type:
+  `GeminiNano(preview, fast)`, `Apple` and `Downloaded(model)`. `RoutingOnDeviceAi` sends each call
+  to the runtime for that type. A variant carries only its own fields, so ML Kit (one client per
+  variant) never gets a second client for the same Gemini Nano model.
+- **The library knows runtimes, the app knows models.** The app supplies the catalog
+  (`DownloadedModel`) and decides which variant handles which task. The library knows nothing about
+  specific models or tasks.
+- Failures are typed: `OnDeviceAiException(reason, variant, code)` with `AiFailureReason` and
   `isReportable`; no user-facing strings in the library.
 
 ## Gemini Nano (ML Kit GenAI, Android)
@@ -27,13 +28,14 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
 
 ## Downloaded models (LiteRT-LM and llama.cpp, Android and desktop)
 
-- The catalog (`LiteRtModel`) pins every file by Hugging Face repository **and commit**, so the
-  same bytes are always downloaded; a new version is a deliberate catalog change. The runtime is a
-  property of the file (`ModelRuntime.LiteRt` / `LlamaCpp`).
+- `DownloadedModel` describes a file: stable `id`, `url`, `fileName`, size, memory needed, context,
+  runtime (`ModelRuntime.LiteRt` / `LlamaCpp`). `huggingFaceUrl(repo, commit, file)` pins the
+  **commit**, so the same bytes are always downloaded; a new version is a deliberate catalog change.
 - Downloads go to `.part` and are renamed when complete (file present = complete model), resume
   with `Range`, check free space first, and respect metered networks (`MeteredNetwork`). On Android
   they run in a WorkManager job (`AiModelDownloadWorker`, subclassed by the app because WorkManager
-  persists the class name) with a `dataSync` foreground service when the system allows it.
+  persists the class name, and finds the model again through `Dependencies.modelById`, since the job
+  keeps only its id) with a `dataSync` foreground service when the system allows it.
 - Models are offered only where they can run: arm64, Android 12+, enough RAM per entry; on desktop
   llama.cpp needs AVX2 (x86_64) or dot product (arm64).
 - Engines are loaded lazily, unloaded after an idle period (`idleUnloadMs`), and fall back from GPU

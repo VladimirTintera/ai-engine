@@ -4,7 +4,7 @@ plugins {
 }
 
 /**
- * Gemma a Qwen přes LiteRT-LM: implementace [eu.tintera.ai.engine.LlmEngineFactory].
+ * Modely `.litertlm` přes LiteRT-LM: implementace [eu.tintera.ai.engine.LlmEngineFactory].
  * Jediné místo v projektu, kde smí být `com.google.ai.edge.litertlm`.
  *
  * Na Androidu ho do aplikace nedává `shared`, ale součást z Google Play stahovaná až na požádání

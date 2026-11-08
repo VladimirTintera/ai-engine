@@ -5,7 +5,7 @@ plugins {
 
 /**
  * Jazykový model v zařízení bez ohledu na aplikaci: rozhraní `OnDeviceAi` a jeho poskytovatelé —
- * Gemini Nano přes ML Kit GenAI (Android), Gemma, Qwen, EuroLLM a Aya stahované na žádost
+ * Gemini Nano přes ML Kit GenAI (Android), modely z katalogu aplikace stahované na žádost
  * a počítané přes LiteRT-LM nebo llama.cpp (Android a desktop), Apple Intelligence přes most do
  * Swiftu (iOS). Stahování modelu, jeho stav pro obrazovku a správa enginu jsou tady.
  *
@@ -28,6 +28,7 @@ kotlin {
         namespace = "eu.tintera.ai.core"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        withHostTest {}
         // Keep pravidla pro R8 aplikace, která knihovnu použije (viz soubor).
         optimization {
             consumerKeepRules.apply {
@@ -85,6 +86,12 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+        }
+
+        // Úloha stahování (`AiModelDownloadWorker`) běží na opravdovém WorkManageru.
+        getByName("androidHostTest").dependencies {
+            implementation(libs.androidx.work.testing)
+            implementation(libs.robolectric)
         }
     }
 }
