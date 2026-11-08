@@ -37,13 +37,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Modely, které si stáhne a spravuje aplikace sama: Gemma a Qwen přes LiteRT-LM, EuroLLM přes
- * llama.cpp. Který soubor, říká [ModelVariant.model] ([LiteRtModel]), a kterým runtime se počítá,
- * [LiteRtModel.runtime]. Stahování, stav i správa enginu jsou pro oba runtime společné; jméno
- * třídy zůstalo z doby, kdy byl jen LiteRT-LM.
+ * Modely, které si stáhne a spravuje aplikace sama, přes LiteRT-LM, nebo llama.cpp. Který soubor,
+ * říká [ModelVariant.model] ([DownloadedModel]), a kterým runtime se počítá, [DownloadedModel.runtime].
+ * Stahování, stav i správa enginu jsou pro oba runtime společné; jméno třídy zůstalo z doby, kdy byl
+ * jen LiteRT-LM.
  *
- * Na rozdíl od Gemini Nano (`MlKitOnDeviceAi`) tu není systémová služba — soubor modelu (0,3 až
- * 3,7 GB) leží v adresáři od platformy ([LiteRtPlatform.modelsDir]) a počítá ho engine uvnitř
+ * Na rozdíl od Gemini Nano (`MlKitOnDeviceAi`) tu není systémová služba — soubor modelu (stovky MB
+ * až gigabajty) leží v adresáři od platformy ([LiteRtPlatform.modelsDir]) a počítá ho engine uvnitř
  * našeho procesu. **Kód je společný pro Android a desktop** (source set `liteRtMain`); co se
  * liší, je za [LiteRtPlatform].
  *
@@ -58,12 +58,12 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   WorkManageru, která přežije i zabití procesu a naváže na `.part`, na desktopu korutina
  *   procesu (aplikace běží, dokud ji uživatel neukončí). Tahle třída drží jen stav pro
  *   obrazovku ([downloads]) a stahuje v [runDownload].
- * - **Engine je v paměti nejvýš jeden**, i když jsou zapnuté oba modely — přechod z Qwenu na
- *   Gemmu ten první zavře. Po chvíli bez použití se uvolní ([idleUnloadMs]).
+ * - **Engine je v paměti nejvýš jeden**, i když je zapnutých víc modelů — přechod na jiný model
+ *   ten první zavře. Po chvíli bez použití se uvolní ([idleUnloadMs]).
  *   Drží gigabajty RAM; nechat ho viset po jednom shrnutí by znamenalo, že systém dřív zabije
  *   aplikaci v pozadí. Načtení trvá do deseti sekund (dokumentace LiteRT-LM), proto se neuvolňuje
- *   hned po odpovědi — návrhy odpovědí přicházejí často po sobě. Když Gemma dělá jen zvuk
- *   a obraz a text počítá Nano, uvolní se dřív (o prodlevě rozhoduje aplikace, [idleUnloadMs]).
+ *   hned po odpovědi — návrhy odpovědí přicházejí často po sobě. O prodlevě rozhoduje aplikace
+ *   ([idleUnloadMs]): model, který dělá jen zvuk a obraz, může uvolnit dřív.
  * - **Generování je jedno po druhém** ([engineLock]). Shrnutí a návrh odpovědi se můžou
  *   potkat a dvě konverzace nad jedním enginem LiteRT-LM výslovně neslibuje.
  * - **GPU, které selže až při generování, nahradí CPU** ([withEngine]): bez OpenCL se GPU engine
@@ -78,19 +78,19 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   ([MAX_OUTPUT_CHARS], pak `Generated.truncated`).
  *
  * Kde model nejde (paměť, systém, chybějící nativní knihovna), řekne platforma ([LiteRtPlatform.canRun]).
- * Selhání nese poskytovatele z varianty, takže hláška jmenuje model, který selhal.
+ * Selhání nese variantu, takže hláška jmenuje model, který selhal.
  */
 class LiteRtOnDeviceAi(
     private val platform: LiteRtPlatform,
-    /** Runtime pro model podle [LiteRtModel.runtime]; na Androidu každý jiná součást z Play. */
+    /** Runtime pro model podle [DownloadedModel.runtime]; na Androidu každý jiná součást z Play. */
     private val runtimes: (ModelRuntime) -> LiteRtRuntime,
     /** Připojení k síti: stav „čeká na síť" a navázání po výpadku. */
     private val connectivity: Connectivity,
     /**
-     * Za jak dlouho po poslední práci engine modelu (podle poskytovatele) uvolnit. Čte se po
-     * každém použití, ne jednou: zapnutí Nano nebo jiné přiřazení úloh to mění za běhu.
+     * Za jak dlouho po poslední práci engine modelu uvolnit. Čte se po každém použití, ne jednou:
+     * zapnutí Nano nebo jiné přiřazení úloh to mění za běhu.
      */
-    private val idleUnloadMs: suspend (AiProvider) -> Long = { DEFAULT_IDLE_UNLOAD_MS },
+    private val idleUnloadMs: suspend (DownloadedModel) -> Long = { DEFAULT_IDLE_UNLOAD_MS },
     /** Je síť placená? Jen pro stav „čeká na Wi-Fi" a zákaz dat za běhu ([setDownloadNetwork]). */
     private val meteredNetwork: MeteredNetwork = NoMeteredNetwork,
 ) : OnDeviceAi {
@@ -101,31 +101,31 @@ class LiteRtOnDeviceAi(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val modelsDir: File get() = platform.modelsDir
-    private fun runtimeOf(model: LiteRtModel): LiteRtRuntime = runtimes(model.runtime)
-    private fun LiteRtModel.file() = File(modelsDir, fileName)
-    private fun LiteRtModel.partFile() = File(modelsDir, "$fileName.part")
+    private fun runtimeOf(model: DownloadedModel): LiteRtRuntime = runtimes(model.runtime)
+    private fun DownloadedModel.file() = File(modelsDir, fileName)
+    private fun DownloadedModel.partFile() = File(modelsDir, "$fileName.part")
 
-    private val downloads = ConcurrentHashMap<LiteRtModel, MutableStateFlow<DownloadState>>()
+    private val downloads = ConcurrentHashMap<DownloadedModel, MutableStateFlow<DownloadState>>()
 
-    private fun stateOf(model: LiteRtModel) = downloads.getOrPut(model) { MutableStateFlow(DownloadState.Idle) }
+    private fun stateOf(model: DownloadedModel) = downloads.getOrPut(model) { MutableStateFlow(DownloadState.Idle) }
 
     /** Doinstalování runtime před stahováním modelu ([download]); [stopDownload] ho zastaví. */
-    private val runtimeInstalls = ConcurrentHashMap<LiteRtModel, Job>()
+    private val runtimeInstalls = ConcurrentHashMap<DownloadedModel, Job>()
 
     /**
      * Smí stahování modelu přes mobilní data ([download], [setDownloadNetwork])? Jen v paměti:
      * úloha přežije proces i s podmínkou sítě, tohle je jen pro stav na obrazovce — po restartu
      * ho obnoví první připojení obrazovky (`download` s volbou z Nastavení).
      */
-    private val mobileData = ConcurrentHashMap<LiteRtModel, Boolean>()
+    private val mobileData = ConcurrentHashMap<DownloadedModel, Boolean>()
 
-    private fun wifiOnly(model: LiteRtModel) = mobileData[model] == false
+    private fun wifiOnly(model: DownloadedModel) = mobileData[model] == false
 
     /** Běžící stahování souboru v [runDownload]; zákaz dat za běhu ho zruší. */
-    private val fetches = ConcurrentHashMap<LiteRtModel, Job>()
+    private val fetches = ConcurrentHashMap<DownloadedModel, Job>()
 
     /** Stahování zrušené zákazem dat ([setDownloadNetwork]), ne zastavením úlohy. */
-    private val wifiRequired: MutableSet<LiteRtModel> = ConcurrentHashMap.newKeySet()
+    private val wifiRequired: MutableSet<DownloadedModel> = ConcurrentHashMap.newKeySet()
 
     /** Runtime k už staženému modelu se doinstaloval sám ([restoreRuntime]); jednou za proces. */
     private val runtimeRestoreStarted: MutableSet<ModelRuntime> = ConcurrentHashMap.newKeySet()
@@ -170,7 +170,7 @@ class LiteRtOnDeviceAi(
      * Jen jednou za proces: kdyby instalace selhávala (aplikace mimo Play), každý dotaz na stav
      * by ji pouštěl znovu. Pak zůstává „Pokračovat ve stahování". Vrací, jestli se instaluje.
      */
-    private fun restoreRuntime(model: LiteRtModel): Boolean {
+    private fun restoreRuntime(model: DownloadedModel): Boolean {
         if (!runtimeRestoreStarted.add(model.runtime)) return false
         logger.i { "Model ${model.displayName} je stažený bez runtime, doinstalovávám ho" }
         val state = stateOf(model)
@@ -237,7 +237,7 @@ class LiteRtOnDeviceAi(
     }
 
     /** Doinstaluje runtime a pak naplánuje model, nebo rovnou skončí, když už je stažený. */
-    private suspend fun installRuntimeThenDownload(model: LiteRtModel, state: MutableStateFlow<DownloadState>) {
+    private suspend fun installRuntimeThenDownload(model: DownloadedModel, state: MutableStateFlow<DownloadState>) {
         try {
             runtimeOf(model).install().collect { progress -> state.value = DownloadState.Running(progress) }
             logger.i { "Runtime ${model.runtime} připravený (${model.displayName})" }
@@ -303,7 +303,7 @@ class LiteRtOnDeviceAi(
     }
 
     /** Průběh stahování pro notifikaci úlohy. */
-    internal fun downloadProgress(model: LiteRtModel): Flow<ModelDownload> =
+    internal fun downloadProgress(model: DownloadedModel): Flow<ModelDownload> =
         stateOf(model).filterIsInstance<DownloadState.Running>().map { it.progress }
 
     /**
@@ -312,7 +312,7 @@ class LiteRtOnDeviceAi(
      * stav pro obrazovku je pak už zapsaný. Zrušení (zastavení úlohy) jde dál beze změny
      * stavu; co znamená, ví až úloha podle důvodu zastavení ([onWorkerStopped]).
      */
-    internal suspend fun runDownload(model: LiteRtModel) {
+    internal suspend fun runDownload(model: DownloadedModel) {
         val state = stateOf(model)
         if (model.file().exists()) {
             state.value = DownloadState.Done
@@ -356,7 +356,7 @@ class LiteRtOnDeviceAi(
      * v popředí) a WorkManager ji spustí znovu — pro obrazovku je to pořád stahování, jen při
      * [waitingForNetwork] s větou, že se čeká na připojení.
      */
-    internal fun onWorkerStopped(model: LiteRtModel, byUser: Boolean, waitingForNetwork: Boolean) {
+    internal fun onWorkerStopped(model: DownloadedModel, byUser: Boolean, waitingForNetwork: Boolean) {
         val state = stateOf(model)
         val current = state.value
         when {
@@ -404,20 +404,20 @@ class LiteRtOnDeviceAi(
         .catch { e ->
             // LiteRT-LM chybové kódy nemá; cokoli z ní je selhání modelu. Zrušení `catch` nechytá.
             throw if (e is Exception && e !is OnDeviceAiException) {
-                OnDeviceAiException(AiFailureReason.ModelError, variant.provider, cause = e)
+                OnDeviceAiException(AiFailureReason.ModelError, variant, cause = e)
             } else {
                 e
             }
         }
 
-    /** Gemma 4 (E2B i E4B) zvuk umí, Qwen ne; stačí, aby byla stažená a zařízení ji uneslo. */
+    /** Zvuk umí jen model s [DownloadedModel.multimodal]; stačí, aby byl stažený a zařízení ho uneslo. */
     override suspend fun canTranscribe(variant: ModelVariant): Boolean =
         variant.model?.multimodal == true && status(variant) == OnDeviceAiStatus.Ready
 
     /**
      * Přepis řeči: zvuk po kusech ([LiteRtPlatform.wavClips], WAV 16 kHz mono, nejvýš 30 s — tak ho modelu dává
      * Gallery), každý kus vlastní konverzací, text se skládá za sebe. Engine musí mít zvukový
-     * backend (`audioBackend`, CPU — pro Gemmu 3n „must be CPU" i v Gallery), proto se načte
+     * backend (`audioBackend`, CPU — „must be CPU" i v Gallery), proto se načte
      * se zvukem; pak poslouží i textovým funkcím, aby se nepřenačítal.
      */
     override fun transcribe(variant: ModelVariant, audioPath: String, prompt: String): Flow<Generated> = flow {
@@ -449,13 +449,13 @@ class LiteRtOnDeviceAi(
     }.flowOn(Dispatchers.Default)
         .catch { e ->
             throw if (e is Exception && e !is OnDeviceAiException) {
-                OnDeviceAiException(AiFailureReason.ModelError, variant.provider, cause = e)
+                OnDeviceAiException(AiFailureReason.ModelError, variant, cause = e)
             } else {
                 e
             }
         }
 
-    /** Gemma 4 (E2B i E4B) obrázky umí, stejně jako zvuk; stačí připravený model. */
+    /** Obrázky umí jen model s [DownloadedModel.multimodal]; stačí připravený model. */
     override suspend fun canDescribeImage(variant: ModelVariant): Boolean =
         variant.model?.multimodal == true && status(variant) == OnDeviceAiStatus.Ready
 
@@ -496,18 +496,18 @@ class LiteRtOnDeviceAi(
     }.flowOn(Dispatchers.Default)
         .catch { e ->
             throw if (e is Exception && e !is OnDeviceAiException) {
-                OnDeviceAiException(AiFailureReason.ModelError, variant.provider, cause = e)
+                OnDeviceAiException(AiFailureReason.ModelError, variant, cause = e)
             } else {
                 e
             }
         }
 
-    /** Velikost KV keše: [MAX_NUM_TOKENS], nebo méně, když víc soubor neunese (Qwen 4 096). */
-    private fun LiteRtModel.maxTokens(): Int = minOf(MAX_NUM_TOKENS, contextTokens)
+    /** Velikost KV keše: [MAX_NUM_TOKENS], nebo méně, když víc soubor neunese. */
+    private fun DownloadedModel.maxTokens(): Int = minOf(MAX_NUM_TOKENS, contextTokens)
 
     /** Soubor modelu; varianta systémového modelu se sem dostat nemá (směrovač ji pošle jinam). */
-    private fun ModelVariant.file(): LiteRtModel =
-        model ?: throw OnDeviceAiException(AiFailureReason.Unavailable, provider)
+    private fun ModelVariant.file(): DownloadedModel =
+        model ?: throw OnDeviceAiException(AiFailureReason.Unavailable, this)
 
     private fun joinTranscript(done: StringBuilder, part: StringBuilder): String =
         if (done.isEmpty()) part.toString().trimStart() else "$done ${part.toString().trimStart()}"
@@ -543,7 +543,7 @@ class LiteRtOnDeviceAi(
      * a odpověď by začala znovu. Zrušení se neopakuje nikdy.
      */
     private suspend fun FlowCollector<Generated>.withEngine(
-        model: LiteRtModel,
+        model: DownloadedModel,
         audio: Boolean = false,
         vision: Boolean = false,
         block: suspend FlowCollector<Generated>.(LlmEngine) -> Unit,
@@ -576,7 +576,7 @@ class LiteRtOnDeviceAi(
             }
         } finally {
             idleUnload = scope.launch {
-                delay(runCatching { idleUnloadMs(model.provider) }.getOrDefault(DEFAULT_IDLE_UNLOAD_MS))
+                delay(runCatching { idleUnloadMs(model) }.getOrDefault(DEFAULT_IDLE_UNLOAD_MS))
                 engineLock.withLock { unloadLocked() }
             }
         }
@@ -587,7 +587,7 @@ class LiteRtOnDeviceAi(
      * zvukem (obrazem) poslouží i textu; bez něj se pro přepis (popis) musí načíst znovu. Při
      * přenačtení si nechá i to, co uměl dosud, ať se přepis a popis nestřídají přenačítáním.
      */
-    private suspend fun loadLocked(model: LiteRtModel, audio: Boolean, vision: Boolean, cpuOnly: Boolean = false): LoadedEngine {
+    private suspend fun loadLocked(model: DownloadedModel, audio: Boolean, vision: Boolean, cpuOnly: Boolean = false): LoadedEngine {
         val current = loaded?.takeIf { it.model == model }
         current?.takeIf { (it.audio || !audio) && (it.vision || !vision) && (!cpuOnly || it.backend == LlmBackend.Cpu) }
             ?.let { return it }
@@ -612,7 +612,7 @@ class LiteRtOnDeviceAi(
      * knihovně, stejně jako u ML Kitu: na zařízení, kde se nenačte, nesmí aplikace spadnout jen
      * proto, že si někdo zapnul volitelnou funkci.
      */
-    private suspend fun createEngine(model: LiteRtModel, audio: Boolean, vision: Boolean, cpuOnly: Boolean): LoadedEngine =
+    private suspend fun createEngine(model: DownloadedModel, audio: Boolean, vision: Boolean, cpuOnly: Boolean): LoadedEngine =
         withContext(Dispatchers.Default) {
             try {
                 val engines = runtimeOf(model).engines()
@@ -663,7 +663,7 @@ class LiteRtOnDeviceAi(
      * Selhání se tu NELOGUJE, loguje ho volající ([OnDeviceAiSettingsViewModel]), který ho
      * dostane i od Gemini Nano. Ve dvou místech by v logu bylo dvakrát.
      */
-    private suspend fun fetch(model: LiteRtModel, state: MutableStateFlow<DownloadState>) {
+    private suspend fun fetch(model: DownloadedModel, state: MutableStateFlow<DownloadState>) {
         var failures = 0
         while (true) {
             val before = model.partFile().length()
@@ -692,15 +692,15 @@ class LiteRtOnDeviceAi(
      *
      * Hugging Face přesměrovává na CDN; `HttpURLConnection` přesměrování v rámci HTTPS následuje
      * sám a hlavičku `Range` přenese. Server, který rozsah nevezme (200 místo 206), dostane
-     * soubor od začátku. **401/403 znamená model za souhlasem s licencí** — to prototyp neumí
+     * soubor od začátku. **401/403 znamená model za souhlasem s licencí** — to knihovna neumí
      * (chtělo by to přihlášení k Hugging Face) a hlásí se jako obyčejné selhání.
      */
-    private suspend fun fetchFile(model: LiteRtModel, onProgress: (ModelDownload) -> Unit) = withContext(Dispatchers.IO) {
+    private suspend fun fetchFile(model: DownloadedModel, onProgress: (ModelDownload) -> Unit) = withContext(Dispatchers.IO) {
         modelsDir.mkdirs()
         val part = model.partFile()
         var offset = if (part.exists()) part.length() else 0L
 
-        val connection = (URL(model.downloadUrl).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(model.url).openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = true
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
@@ -766,7 +766,7 @@ class LiteRtOnDeviceAi(
     }
 
     /** Hotový `.part` přejmenuje na model. Není to chyba sítě, takže ne [IOException]. */
-    private fun moveFinished(model: LiteRtModel) {
+    private fun moveFinished(model: DownloadedModel) {
         check(model.partFile().renameTo(model.file())) { "Cannot move ${model.partFile().name}" }
     }
 
@@ -789,7 +789,7 @@ class LiteRtOnDeviceAi(
     }
 
     /** Server odpověděl jinak než daty. Čekáním na síť se to nespraví, takže se neopakuje. */
-    private class HttpStatusException(code: Int, model: LiteRtModel) :
+    private class HttpStatusException(code: Int, model: DownloadedModel) :
         IOException("HTTP $code for ${model.displayName}")
 
     /** Vnitřní signál, že výstup dosáhl stropu; ven se nedostane. */
@@ -800,9 +800,9 @@ class LiteRtOnDeviceAi(
         val SAMPLING = LlmSampling(topK = 40, topP = 0.95, temperature = 0.2)
 
         /**
-         * Velikost KV keše = vstup a výstup DOHROMADY. Gemma 4 unese víc (Gallery uvádí kontext
-         * 32 000), ale keš stojí paměť úměrně délce, a 8 192 je totéž, co dává Gemini Nano —
-         * shrnutí se tak u obou poskytovatelů chová stejně.
+         * Velikost KV keše = vstup a výstup DOHROMADY. Soubor může unést víc, ale keš stojí paměť
+         * úměrně délce, a 8 192 je totéž, co dává Gemini Nano — shrnutí se tak chová stejně
+         * u systémového i staženého modelu.
          */
         const val MAX_NUM_TOKENS = 8_192
 
@@ -841,7 +841,7 @@ class LiteRtOnDeviceAi(
 
 /** Načtený engine: který soubor, jestli má zvukový (obrazový) backend a na čem počítá. */
 private class LoadedEngine(
-    val model: LiteRtModel,
+    val model: DownloadedModel,
     val audio: Boolean,
     val vision: Boolean,
     val backend: LlmBackend,

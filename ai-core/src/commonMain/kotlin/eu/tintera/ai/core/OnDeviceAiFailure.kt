@@ -40,14 +40,23 @@ enum class AiFailureReason {
  * a tím do Crashlytics, kde podle ní má být poznat, co se stalo („GeminiNano failed: ModelError
  * (code 5)"), a nesmí v ní být obsah konverzace.
  *
+ * @property variant model, který selhal; podle něj aplikace hlášku pojmenuje.
  * @property code chybový kód runtime (ML Kit `GenAiException.errorCode`), když nějaký je.
  */
 class OnDeviceAiException(
     val reason: AiFailureReason,
-    val provider: AiProvider,
+    val variant: ModelVariant,
     val code: Int? = null,
     cause: Throwable? = null,
-) : Exception("${provider.name} failed: $reason" + (code?.let { " (code $it)" } ?: ""), cause)
+) : Exception("${variant.logName} failed: $reason" + (code?.let { " (code $it)" } ?: ""), cause)
+
+/** Jméno do zprávy výjimky: typ systémového modelu, nebo [DownloadedModel.id]. */
+private val ModelVariant.logName: String
+    get() = when (this) {
+        is ModelVariant.GeminiNano -> "GeminiNano"
+        ModelVariant.Apple -> "Apple"
+        is ModelVariant.Downloaded -> model.id
+    }
 
 /**
  * Patří selhání do hlášení pádů jako samostatný problém? Jen to, co ukazuje na rozbitý model

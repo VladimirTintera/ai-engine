@@ -21,24 +21,24 @@ import kotlinx.coroutines.withTimeout
 class LiteRtDownloadNetworkTest {
 
     private val root = Files.createTempDirectory("ai-litert-network").toFile()
-    private val model = LiteRtModel.E2B
-    private val started: MutableList<Pair<LiteRtModel, Boolean>> = Collections.synchronizedList(mutableListOf())
-    private val changed: MutableList<Pair<LiteRtModel, Boolean>> = Collections.synchronizedList(mutableListOf())
+    private val model = testModel()
+    private val started: MutableList<Pair<DownloadedModel, Boolean>> = Collections.synchronizedList(mutableListOf())
+    private val changed: MutableList<Pair<DownloadedModel, Boolean>> = Collections.synchronizedList(mutableListOf())
 
     private val platform = object : LiteRtPlatform {
         override val modelsDir = File(root, "ai-models").apply { mkdirs() }
         override val cacheDir = File(root, "ai-cache")
-        override fun canRun(model: LiteRtModel) = true
+        override fun canRun(model: DownloadedModel) = true
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()
-        override fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
+        override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
             started += model to unmeteredOnly
         }
-        override fun setDownloadNetwork(model: LiteRtModel, unmeteredOnly: Boolean) {
+        override fun setDownloadNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {
             changed += model to unmeteredOnly
         }
-        override fun cancelDownload(model: LiteRtModel) {}
-        override suspend fun downloadPending(model: LiteRtModel) = false
+        override fun cancelDownload(model: DownloadedModel) {}
+        override suspend fun downloadPending(model: DownloadedModel) = false
     }
 
     private fun ai(metered: Boolean) = LiteRtOnDeviceAi(

@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 
 /**
- * Volba poskytovatele platí pro celou aplikaci, takže o ní rozhoduje jediné místo. Tady se hlídá,
- * že volání dojde ke správnému runtime a že každý dostane jen pole, která se ho týkají.
+ * Volba modelu platí pro celou aplikaci, takže o ní rozhoduje jediné místo. Tady se hlídá,
+ * že volání dojde ke správnému runtime.
  */
 class RoutingOnDeviceAiTest {
 
@@ -32,98 +32,90 @@ class RoutingOnDeviceAiTest {
             flowOf(Generated("$imagePath $prompt")).also { seen += variant }
     }
 
-    /** Gemini Nano přes ML Kit obraz nebere (výchozí `false`); popis jde jen Gemmě. */
+    /** Gemini Nano přes ML Kit obraz nebere (výchozí `false`); popis jde stahovanému modelu. */
     @Test
-    fun popisFotkyJdeGemme() = runTest {
+    fun popisFotkyJdeStahovanemuModelu() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Ready)
-        val gemma = Recorder(OnDeviceAiStatus.Ready)
-        val ai = RoutingOnDeviceAi(nano, gemma)
+        val liteRt = Recorder(OnDeviceAiStatus.Ready)
+        val ai = RoutingOnDeviceAi(nano, liteRt)
+        val model = testModel(multimodal = true).variant
 
-        assertEquals(false, ai.canDescribeImage(ModelVariant(provider = AiProvider.GeminiNano)))
-        val text = ai.describeImage(ModelVariant(provider = AiProvider.Gemma, fast = true), "/fotka.jpg", "popiš").toList()
+        assertEquals(false, ai.canDescribeImage(ModelVariant.GeminiNano()))
+        val text = ai.describeImage(model, "/fotka.jpg", "popiš").toList()
 
         assertEquals(listOf(Generated("/fotka.jpg popiš")), text)
-        assertEquals(listOf(ModelVariant(provider = AiProvider.Gemma)), gemma.seen)
+        assertEquals(listOf(model), liteRt.seen)
     }
 
-    /** Qwen jde do téhož runtime jako Gemma, bez voleb, které se ho netýkají. */
+    /** Stahované modely jdou do téhož runtime, ať je počítá LiteRT-LM, nebo llama.cpp. */
     @Test
-    fun qwenJdeDoLiteRt() = runTest {
+    fun stahovaneModelyJdouDoLiteRt() = runTest {
+        val nano = Recorder(OnDeviceAiStatus.Ready)
+        val liteRt = Recorder(OnDeviceAiStatus.Downloadable)
+        val ai = RoutingOnDeviceAi(nano, liteRt)
+        val litert = testModel("litert").variant
+        val gguf = testModel("gguf", ModelRuntime.LlamaCpp).variant
+
+        assertEquals(OnDeviceAiStatus.Downloadable, ai.status(litert))
+        assertEquals(OnDeviceAiStatus.Downloadable, ai.status(gguf))
+
+        assertEquals(listOf(litert, gguf), liteRt.seen)
+        assertEquals(emptyList(), nano.seen)
+    }
+
+    /** Varianta drží jen svoje pole, takže ML Kit nedostane nic, co by založilo druhého klienta. */
+    @Test
+    fun geminiNanoDostaneSvojeVolby() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Ready)
         val liteRt = Recorder(OnDeviceAiStatus.Downloadable)
         val ai = RoutingOnDeviceAi(nano, liteRt)
 
-        val status = ai.status(
-            ModelVariant(provider = AiProvider.Qwen, fast = true, gemma = LiteRtModel.E4B, qwen = LiteRtModel.Qwen3_0_6B),
-        )
+        assertEquals(OnDeviceAiStatus.Ready, ai.status(ModelVariant.GeminiNano(fast = true)))
 
-        assertEquals(OnDeviceAiStatus.Downloadable, status)
-        assertEquals(listOf(ModelVariant(provider = AiProvider.Qwen, qwen = LiteRtModel.Qwen3_0_6B)), liteRt.seen)
-        assertEquals(emptyList(), nano.seen)
-        assertEquals(LiteRtModel.Qwen3_0_6B, liteRt.seen.single().model)
+        assertEquals(listOf<ModelVariant>(ModelVariant.GeminiNano(fast = true)), nano.seen)
+        assertEquals(emptyList(), liteRt.seen)
     }
 
     @Test
-    fun geminiNanoDostaneJenSvojeVolby() = runTest {
+    fun generovaniJdeStahovanemuModelu() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Ready)
-        val gemma = Recorder(OnDeviceAiStatus.Downloadable)
-        val ai = RoutingOnDeviceAi(nano, gemma)
+        val liteRt = Recorder(OnDeviceAiStatus.Downloadable)
+        val ai = RoutingOnDeviceAi(nano, liteRt)
 
-        val status = ai.status(ModelVariant(provider = AiProvider.GeminiNano, fast = true, gemma = LiteRtModel.E4B))
-
-        assertEquals(OnDeviceAiStatus.Ready, status)
-        // Model Gemmy do klíče klienta ML Kitu nepatří — jinak by vznikl druhý klient téhož modelu.
-        assertEquals(listOf(ModelVariant(provider = AiProvider.GeminiNano, fast = true)), nano.seen)
-        assertEquals(emptyList(), gemma.seen)
-    }
-
-    @Test
-    fun gemmaDostaneJenModel() = runTest {
-        val nano = Recorder(OnDeviceAiStatus.Ready)
-        val gemma = Recorder(OnDeviceAiStatus.Downloadable)
-        val ai = RoutingOnDeviceAi(nano, gemma)
-
-        val text = ai.generate(
-            ModelVariant(provider = AiProvider.Gemma, preview = true, fast = true, gemma = LiteRtModel.E4B),
-            "ahoj",
-        ).toList()
+        val text = ai.generate(testModel().variant, "ahoj").toList()
 
         assertEquals(listOf(Generated("ahoj")), text)
-        assertEquals(listOf(ModelVariant(provider = AiProvider.Gemma, gemma = LiteRtModel.E4B)), gemma.seen)
+        assertEquals(listOf(testModel().variant), liteRt.seen)
         assertEquals(emptyList(), nano.seen)
     }
 
+    /** Apple Intelligence je jen na iOS, kde se směrovač nepoužívá: tady žádný runtime nedostane nic. */
     @Test
-    fun smazaniJdeZvolenemuPoskytovateli() = runTest {
+    fun appleSeNikamNeposila() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Ready)
-        val gemma = Recorder(OnDeviceAiStatus.Ready)
-        RoutingOnDeviceAi(nano, gemma).delete(ModelVariant(provider = AiProvider.Gemma))
-        assertEquals(1, gemma.seen.size)
+        val liteRt = Recorder(OnDeviceAiStatus.Ready)
+
+        assertEquals(OnDeviceAiStatus.Unsupported, RoutingOnDeviceAi(nano, liteRt).status(ModelVariant.Apple))
+
+        assertEquals(emptyList(), nano.seen)
+        assertEquals(emptyList(), liteRt.seen)
+    }
+
+    @Test
+    fun smazaniJdeZvolenemuRuntime() = runTest {
+        val nano = Recorder(OnDeviceAiStatus.Ready)
+        val liteRt = Recorder(OnDeviceAiStatus.Ready)
+        RoutingOnDeviceAi(nano, liteRt).delete(testModel().variant)
+        assertEquals(1, liteRt.seen.size)
         assertEquals(emptyList(), nano.seen)
     }
 
     @Test
-    fun zastaveniStahovaniJdeZvolenemuPoskytovateli() = runTest {
+    fun zastaveniStahovaniJdeZvolenemuRuntime() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Downloading)
-        val gemma = Recorder(OnDeviceAiStatus.Downloading)
-        RoutingOnDeviceAi(nano, gemma).stopDownload(ModelVariant(provider = AiProvider.Gemma, fast = true, gemma = LiteRtModel.E4B))
-        assertEquals(listOf(ModelVariant(provider = AiProvider.Gemma, gemma = LiteRtModel.E4B)), gemma.seen)
+        val liteRt = Recorder(OnDeviceAiStatus.Downloading)
+        RoutingOnDeviceAi(nano, liteRt).stopDownload(testModel().variant)
+        assertEquals(listOf(testModel().variant), liteRt.seen)
         assertEquals(emptyList(), nano.seen)
-    }
-
-    @Test
-    fun modelStahujeJenAplikaceUGemmy() {
-        assertEquals(true, ModelVariant(provider = AiProvider.Gemma).appManaged)
-        assertEquals(false, ModelVariant(provider = AiProvider.GeminiNano).appManaged)
-    }
-
-    @Test
-    fun adresaModeluNeseCommit() {
-        // Commit v adrese drží stažený soubor na verzi z katalogu, i když autor nahraje novější.
-        assertEquals(
-            "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/" +
-                "6e5c4f1e395deb959c494953478fa5cec4b8008f/gemma-4-E2B-it.litertlm?download=true",
-            LiteRtModel.E2B.downloadUrl,
-        )
     }
 }

@@ -3,15 +3,16 @@
 On-device language models for Kotlin Multiplatform apps: one `OnDeviceAi` interface over
 
 - **Gemini Nano** on Android through ML Kit GenAI (Prompt API, Android AICore),
-- **downloaded models** on Android and desktop (JVM): Gemma and Qwen through
-  [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), EuroLLM and Aya Expanse (GGUF) through
+- **downloaded models** on Android and desktop (JVM): `.litertlm` files through
+  [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), GGUF files through
   [llama.cpp](https://github.com/ggml-org/llama.cpp),
 - **Apple Intelligence** (Foundation Models) on iOS 26+ through a small Swift bridge.
 
 The library downloads models (resumable, Wi-Fi/metered aware, in a WorkManager job on Android),
 reports their state for a settings screen, loads and unloads engines, falls back from GPU to CPU and
-routes each call to the right provider. Everything app-specific stays in the app: prompts, which
-model handles which task, settings, user-facing texts and UI.
+routes each call to the right runtime. **The library knows runtimes, the app knows models:** the
+library contains no model catalog. Everything app-specific stays in the app: which models exist,
+prompts, which model handles which task, settings, user-facing texts and UI.
 
 It was extracted from the [Plume](https://github.com/VladimirTintera/telegram) Telegram client and
 is shared with other apps by the same author. The API is not stable yet; there are no published
@@ -22,7 +23,7 @@ artifacts — use it as a git submodule.
 | Module | Platforms | What it is |
 | --- | --- | --- |
 | `:ai-engine` | Android, JVM | Interface of an in-process model runtime (`LlmEngineFactory`, `LlmEngine`, `LlmConversation`). No dependencies besides coroutines. |
-| `:ai-core` | Android, JVM, iOS | `OnDeviceAi` and its providers: `MlKitOnDeviceAi` (Gemini Nano), `LiteRtOnDeviceAi` (downloaded models), `AppleOnDeviceAi` (iOS), `RoutingOnDeviceAi`. Model catalog, downloads, typed failures (`OnDeviceAiException`), Play Feature Delivery runtime loader. Depends only on `:ai-engine`, never on a runtime. |
+| `:ai-core` | Android, JVM, iOS | `OnDeviceAi` and its providers: `MlKitOnDeviceAi` (Gemini Nano), `LiteRtOnDeviceAi` (downloaded models), `AppleOnDeviceAi` (iOS), `RoutingOnDeviceAi`. Downloads, typed failures (`OnDeviceAiException`), Play Feature Delivery runtime loader. Depends only on `:ai-engine`, never on a runtime. |
 | `:ai-litert` | Android, JVM | `LlmEngineFactory` on top of LiteRT-LM (`.litertlm` files). The only module with `com.google.ai.edge.litertlm`. |
 | `:ai-llamacpp` | JVM (Android + desktop) | `LlmEngineFactory` on top of llama.cpp (GGUF files): Kotlin code, JNI bridge, `CMakeLists.txt` and the llama.cpp submodule. Builds nothing native itself. |
 | `:ai-llamacpp-android` | Android | Builds `libai_engine_llama.so` with the NDK (arm64-v8a, x86_64 for the emulator; 16 KB pages). |
@@ -71,7 +72,37 @@ Requirements:
   configures `:ai-llamacpp-android`, and CMake (`cmake`) for llama.cpp.
 - JDK toolchain 17 (resolved through foojay if missing).
 
-### 2. Wire the providers
+### 2. Define your models
+
+The app owns the catalog. Each downloadable model is a `DownloadedModel`:
+
+```kotlin
+val SmallModel = DownloadedModel(
+    id = "small-model", // stable: it is stored and is part of the download job's name
+    displayName = "Small model",
+    // Pins the commit, so the same bytes are always downloaded.
+    url = huggingFaceUrl(repo = "some-org/some-model", commit = "<commit sha>", file = "model.litertlm"),
+    fileName = "model.litertlm",
+    sizeBytes = 343_490_560,
+    minMemoryGb = 4, // not offered on devices with less memory
+    runtime = ModelRuntime.LiteRt, // or ModelRuntime.LlamaCpp for GGUF files
+    contextTokens = 4_096, // default 8,192, which is also the library's ceiling
+    multimodal = false, // true = also takes audio and images
+)
+val Catalog = listOf(SmallModel)
+```
+
+Every call takes a `ModelVariant`, and its type selects the runtime:
+
+```kotlin
+ai.generate(ModelVariant.GeminiNano(fast = true), prompt) // Android, system model
+ai.generate(ModelVariant.Apple, prompt) // iOS, system model
+ai.generate(ModelVariant.Downloaded(SmallModel), prompt) // or SmallModel.variant
+```
+
+**Do not change `id`** of a shipped model: a pending download job and any stored choice refer to it.
+
+### 3. Wire the providers
 
 Android (the same shape works with any DI):
 
@@ -103,6 +134,10 @@ val liteRt = LiteRtOnDeviceAi(
 val ai: OnDeviceAi = RoutingOnDeviceAi(geminiNano = MlKitOnDeviceAi(), liteRt = liteRt)
 ```
 
+The worker's `dependencies()` returns `AiModelDownloadWorker.Dependencies(ai, notifications, modelById)`.
+WorkManager restarts the job after the process dies with nothing but the model's `id`, so
+`modelById = { id -> Catalog.find { it.id == id } }` has to find it again. An unknown id fails the job.
+
 Desktop (JVM): `LiteRtOnDeviceAi(DesktopLiteRtPlatform(modelsDirectory, audio), runtimes, …)` with
 `BundledLiteRtRuntime(LITERT_ENGINE_FACTORY)` / `BundledLiteRtRuntime(LLAMACPP_ENGINE_FACTORY)`;
 the app puts `:ai-litert` and `:ai-llamacpp-desktop` on its runtime classpath.
@@ -112,15 +147,17 @@ dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models 
 `IosOnDeviceModel.model` before creating `AppleOnDeviceAi`. A reference implementation is in
 [`ios/AppleTextModel.swift`](ios/AppleTextModel.swift).
 
-### 3. What the app provides
+### 4. What the app provides
 
+- **The model catalog** (`DownloadedModel`), including showing a model's license where it requires
+  that. `idleUnloadMs` takes the model, so the app can set how long each one stays loaded.
 - **Prompts and task selection.** `generate`, `transcribe(variant, audioPath, prompt)` and
   `describeImage(variant, imagePath, prompt)` take a finished prompt.
 - **Interfaces:** `Connectivity`, `AudioClipDecoder` (WAV 16 kHz mono, max 30 s; optional),
   `ModelDownloadNotifications` (channel, icon and texts of the download notification), a models
   directory on desktop, `MeteredNetwork`, `DeviceLoad`.
-- **User-facing texts.** Failures come as `OnDeviceAiException` with an `AiFailureReason`; the app
-  maps them to messages.
+- **User-facing texts.** Failures come as `OnDeviceAiException` with an `AiFailureReason` and the
+  `variant` that failed; the app maps them to messages.
 - **The Play consent dialog.** Observe `SplitInstallConfirmations.pending` in the root activity,
   call `markShown`, and pass the result back from `takeShown()`.
 - **Play Feature Delivery modules.** The app declares one `com.android.dynamic-feature` module per
@@ -146,12 +183,10 @@ dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models 
   the downloaded models are unavailable.
 - **iOS only through the Swift bridge** — Kotlin/Native cannot call the Swift-only
   `FoundationModels`. Text generation only (no structured output, audio or images on iOS yet).
-- Downloaded models need arm64, Android 12+ and enough RAM (per catalog entry); llama.cpp on
+- Downloaded models need arm64, Android 12+ and enough RAM (`minMemoryGb`); llama.cpp on
   desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS.
-- The model catalog (`LiteRtModel`) is still an enum with the models used by Plume; turning it
-  into data supplied by the app is planned.
-- Model weights are never bundled. Each model has its own license (Aya Expanse: CC BY-NC 4.0,
-  non-commercial); see [NOTICE](NOTICE).
+- Model weights are never bundled, and the library names no models. Each model has its own license,
+  which is the concern of the app that offers it; see [NOTICE](NOTICE).
 
 ## Building
 

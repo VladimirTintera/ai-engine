@@ -18,7 +18,7 @@ plugins {
  *   MSVC na Windows (najde ho `vswhere`, statické CRT, jako toasty v Plume :client:shared), GCC nebo
  *   Clang na Linuxu.
  * - **Bez submodulu, CMake nebo překladače se lokálně přeskočí** (desktop se přeloží i bez nich,
- *   jen EuroLLM nenabídne); **na CI (`CI`) je to chyba**, ať release nevyjde potichu bez modelu.
+ *   jen modely GGUF nenabídnou); **na CI (`CI`) je to chyba**, ať release nevyjde potichu bez modelu.
  */
 kotlin {
     jvmToolchain(17)
@@ -87,7 +87,7 @@ val buildLlamaCppDesktop = tasks.register("buildLlamaCppDesktop") {
         out.deleteRecursively()
         fun skip(message: String) {
             if (requireToolchain) throw GradleException(message)
-            logger.warn("$message EuroLLM se na desktopu nenabídne.")
+            logger.warn("$message Modely GGUF se na desktopu nenabídnou.")
         }
         if (!submodule.file("CMakeLists.txt").asFile.isFile) {
             skip("Chybí submodul llama.cpp (git submodule update --init --depth 1).")

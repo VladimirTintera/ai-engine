@@ -70,7 +70,7 @@ private class LiteRtConversation(private val conversation: Conversation) : LlmCo
     override fun send(content: List<LlmContent>, maxOutputTokens: Int?): Flow<String> =
         conversation.sendMessageAsync(
             Contents.of(content.map { it.toLiteRt() }),
-            // Qwen3 by jinak psal úvahy do zvláštního kanálu a odpověď by přišla mnohem později.
+            // Model s přemýšlením by jinak psal úvahy do zvláštního kanálu a odpověď by přišla mnohem později.
             extraContext = mapOf("enable_thinking" to false),
             maxOutputToken = maxOutputTokens,
         ).map { it.toString() }

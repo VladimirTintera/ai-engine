@@ -24,20 +24,20 @@ class LiteRtRuntimeTest {
 
     private val root = Files.createTempDirectory("ai-litert-runtime").toFile()
     private val models = File(root, "ai-models").apply { mkdirs() }
-    private val model = LiteRtModel.E2B
-    private val started: MutableList<LiteRtModel> = Collections.synchronizedList(mutableListOf())
+    private val model = testModel()
+    private val started: MutableList<DownloadedModel> = Collections.synchronizedList(mutableListOf())
 
     private val platform = object : LiteRtPlatform {
         override val modelsDir = models
         override val cacheDir = File(root, "ai-cache")
-        override fun canRun(model: LiteRtModel) = true
+        override fun canRun(model: DownloadedModel) = true
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()
-        override fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
+        override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
             started += model
         }
-        override fun cancelDownload(model: LiteRtModel) {}
-        override suspend fun downloadPending(model: LiteRtModel) = false
+        override fun cancelDownload(model: DownloadedModel) {}
+        override suspend fun downloadPending(model: DownloadedModel) = false
     }
 
     private fun modelFile() = File(models, model.fileName)
@@ -109,7 +109,7 @@ class LiteRtRuntimeTest {
         assertEquals(OnDeviceAiStatus.Ready, ai.status(model.variant))
     }
 
-    /** EuroLLM (GGUF) si doinstaluje llama.cpp, ne LiteRT-LM — každý runtime je jiná součást. */
+    /** Model GGUF si doinstaluje llama.cpp, ne LiteRT-LM — každý runtime je jiná součást. */
     @Test
     fun modelSiBereSvujRuntime() = runBlocking {
         val liteRt = FakeLiteRtRuntime(installed = true)
@@ -117,14 +117,29 @@ class LiteRtRuntimeTest {
         llamaCpp.finish.complete(null)
         val runtimes = mapOf(ModelRuntime.LiteRt to liteRt, ModelRuntime.LlamaCpp to llamaCpp)
         val ai = LiteRtOnDeviceAi(platform, runtimes::getValue, AlwaysOnline)
-        val euroMoe = LiteRtModel.EuroMoe2_6B
-        val collecting = launch { ai.download(euroMoe.variant).collect {} }
+        val gguf = testModel("gguf", ModelRuntime.LlamaCpp)
+        val collecting = launch { ai.download(gguf.variant).collect {} }
 
         withTimeout(5.seconds) { while (started.isEmpty()) delay(10) }
-        assertEquals(listOf(euroMoe), started.toList())
+        assertEquals(listOf(gguf), started.toList())
         assertEquals(1, llamaCpp.installs)
         assertEquals(0, liteRt.installs)
         collecting.cancel()
+    }
+
+    /** Aplikace může pokaždé poslat novou instanci: je to tentýž model, stahování se jen sleduje. */
+    @Test
+    fun jinaInstanceTehozModeluSeNestahujePodruhe() = runBlocking {
+        val ai = LiteRtOnDeviceAi(platform, { FakeLiteRtRuntime(installed = true) }, AlwaysOnline)
+        val first = launch { ai.download(testModel().variant).collect {} }
+        withTimeout(5.seconds) { while (started.isEmpty()) delay(10) }
+
+        val second = launch { ai.download(testModel().variant).collect {} }
+        delay(100)
+
+        assertEquals(1, started.size)
+        first.cancel()
+        second.cancel()
     }
 
     @Test

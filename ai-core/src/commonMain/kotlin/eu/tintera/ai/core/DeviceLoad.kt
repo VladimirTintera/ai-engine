@@ -13,13 +13,13 @@ interface DeviceLoad {
     val strained: Boolean
 }
 
-/** Platforma bez Gemmy (iOS, desktop) a testy: zátěž se neřeší. */
+/** Platforma bez stahovaných modelů, nebo kde se zátěž neřeší (iOS, desktop), a testy. */
 object NoDeviceLoad : DeviceLoad {
     override val strained: Boolean = false
 }
 
 /**
- * [variant], pokud ji zátěž nevylučuje; stahovaný model (Gemma, Qwen…) pod zátěží ([strained])
+ * [variant], pokud ji zátěž nevylučuje; stahovaný model pod zátěží ([strained])
  * = `null`. Pro úlohy, které aplikace pouští SAMA, ne na ťuknutí. **Gemini Nano a Apple jedou
  * i pod zátěží** — počítá je systém (AICore, Foundation Models), který si úsporu řídí sám,
  * a aplikace kvůli nim nic nenačítá.

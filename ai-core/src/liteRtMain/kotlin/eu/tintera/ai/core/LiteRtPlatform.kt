@@ -16,7 +16,7 @@ interface LiteRtPlatform {
     val cacheDir: File
 
     /** Unese zařízení [model]? Paměť, systém, nativní knihovna runtime. Levný dotaz. */
-    fun canRun(model: LiteRtModel): Boolean
+    fun canRun(model: DownloadedModel): Boolean
 
     /**
      * Má [runtime] tady GPU backend? Když ne, engine se rovnou načítá na CPU: zkoušet GPU by
@@ -39,13 +39,13 @@ interface LiteRtPlatform {
      * [unmeteredOnly]: stahovat jen na neplacené síti a na placené počkat (Android: podmínka
      * úlohy). Platforma, která placenou síť nepozná, ho přejde — aplikace tam volbu nemá nabízet.
      */
-    fun startDownload(model: LiteRtModel, unmeteredOnly: Boolean, run: suspend () -> Unit)
+    fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit)
 
     /**
      * Změní [unmeteredOnly] u naplánovaného nebo běžícího stahování [model], aniž by ho zastavila;
      * nic neběží-li, nic nespustí. Výchozí nic: kde placenou síť nepoznáme, není co měnit.
      */
-    fun setDownloadNetwork(model: LiteRtModel, unmeteredOnly: Boolean) {}
+    fun setDownloadNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {}
 
     /**
      * Text, který jde do modelu (pokyn i přepis zpráv), upravený tak, aby ho nativní strana
@@ -54,10 +54,10 @@ interface LiteRtPlatform {
     fun modelText(text: String): String = text
 
     /** Zastaví stahování [model]; stažená část zůstává. */
-    fun cancelDownload(model: LiteRtModel)
+    fun cancelDownload(model: DownloadedModel)
 
     /** Je stahování [model] naplánované nebo běží (i z minulého běhu procesu)? */
-    suspend fun downloadPending(model: LiteRtModel): Boolean
+    suspend fun downloadPending(model: DownloadedModel): Boolean
 }
 
 /**

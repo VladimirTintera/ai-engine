@@ -8,6 +8,11 @@
 > `:ai-llamacpp-desktop` here (dříve `:client:ai-…`, balíčky dříve `eu.tintera.plume.ai.*`, nyní
 > `eu.tintera.ai.*`). Sekce o jednotlivých funkcích Plume (shrnutí, návrhy odpovědí, triáž…)
 > zůstaly v Plume.
+>
+> **Modely v knihovně už nejsou.** Katalog dodává aplikace (`DownloadedModel`), `ModelVariant` je
+> sealed typ (`GeminiNano`, `Apple`, `Downloaded`) a `LiteRtModel` ani `AiProvider` už neexistují.
+> Konkrétní modely (Gemma, Qwen, EuroLLM, Aya…), `LiteRtModel` a `AiProvider` v těchto poznámkách
+> jsou stav z doby, kdy katalog nesla knihovna; platí dál jako poznatky o katalogu Plume.
 ## Modul :client:ai-core
 
 Poskytovatelé modelu v zařízení jsou vyčlenění do vlastního KMP modulu (balíček
@@ -20,7 +25,7 @@ má proto už teď, ať se při přesunu nepřejmenovává podruhé; ostatní mo
 `eu.tintera.plume.ai.*`. Hranici hlídá Gradle: `ai-core` na `shared` nevidí, takže import z Plume
 se nepřeloží (`grep -rn 'eu.tintera.plume\.' client/ai-core/src` najde jen `ai.engine`).
 
-- **V knihovně:** rozhraní `OnDeviceAi` s `ModelVariant`, `AiProvider`, katalogem `LiteRtModel`,
+- **V knihovně:** rozhraní `OnDeviceAi` s `ModelVariant`, popisem modelu `DownloadedModel`,
   stavy a průběhem stahování; `RoutingOnDeviceAi`; typovaná chyba `OnDeviceAiException`
   s `AiFailureReason` a `isReportable` (bez textů); `generateAnswer` (strukturovaně, jinak textem);
   `estimatedTokenCount`; `MeteredNetwork`, `DeviceLoad` a `avoidUnderLoad` i s implementacemi pro
@@ -68,14 +73,13 @@ se nepřeloží (`grep -rn 'eu.tintera.plume\.' client/ai-core/src` najde jen `a
   `api`). Swift implementuje `OnDeviceTextModel` a plní `IosOnDeviceModel`; bez exportu by je
   framework nenesl (nebo jen pod jménem s předponou modulu) a `AppleTextModel.swift` by se
   nepřeložil.
-- **Katalog modelů zůstal enum** (`LiteRtModel`) se všemi poskytovateli Plume, stejně jako pole
-  `gemma` / `qwen` / `euroLlm` / `aya` v `ModelVariant`. Jména položek se ukládají (nastavení,
-  jméno úlohy stahování) a pořadí určuje náhradu za velikost — převod na data, která předá
-  aplikace, by sahal do nastavení i UI. **Další krok** před sdílením s jinou aplikací: katalog
-  jako seznam od aplikace (repozitář, commit, soubor, velikost, paměť, kontext, runtime,
-  licence) a variantu nést jen jako odkaz na položku.
-- **Testy:** `./gradlew :client:ai-core:jvmTest` (router, katalog, stahování, GPU záloha,
-  runtime). Testy, které potřebují prompty Plume (`StructuredAnswersTest`, `TokenEstimateTest`,
+- **Katalog modelů dodává aplikace** (`DownloadedModel`), knihovna žádný model nezná. `id` se ukládá
+  (nastavení, jméno úlohy stahování `ai-model-download-<id>`), takže se nemění. Úloha stahování po
+  zabití procesu zná jen `id` a model si vezme přes `AiModelDownloadWorker.Dependencies.modelById`;
+  neznámé `id` = `Result.failure()`. Pořadí náhrad za velikost, licence a výběr modelu pro úlohu
+  jsou věc aplikace.
+- **Testy:** `./gradlew :ai-core:jvmTest :ai-core:testAndroidHostTest` (router, model, stahování,
+  GPU záloha, runtime, úloha WorkManageru). Testy, které potřebují prompty Plume (`StructuredAnswersTest`, `TokenEstimateTest`,
   `OnDeviceAiFailureTest`, `DeviceLoadTest`), zůstaly ve `shared`.
 
 ## Dva poskytovatelé: Gemini Nano a Gemma
@@ -89,8 +93,8 @@ poskytovatelích nemusí vědět nic.
 
 - **Poskytovatel je pole varianty, ne druhé rozhraní.** Funkce dostane hotovou variantu pro
   svou úlohu; kdyby řešila poskytovatele sama, jedna by na to zapomněla.
-- **Router variantu NORMALIZUJE** (`forGeminiNano`, `forGemma`, `forQwen`). ML Kit drží klienta na
-  variantu v mapě, takže by jinak změna modelu Gemmy vyrobila druhého klienta téhož Nano.
+- **Varianta nese jen svoje pole** (sealed `ModelVariant`). ML Kit drží klienta na variantu v mapě,
+  takže změna staženého modelu nemůže vyrobit druhého klienta téhož Nano.
 - **Katalog Gemmy (`LiteRtModel`) je převzatý z Google AI Edge Gallery**
   (`model_allowlists/1_0_19.json`): soubor, commit na Hugging Face, velikost a doporučená paměť.
   **Commit je součást adresy**, takže se stahuje pořád tentýž soubor; nová verze = vědomá změna

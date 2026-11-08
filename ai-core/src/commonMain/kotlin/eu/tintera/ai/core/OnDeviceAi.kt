@@ -12,8 +12,11 @@ import kotlinx.coroutines.flow.flow
  * (`com.google.mlkit.genai.*`, [MlKitOnDeviceAi]) a stahované modely přes LiteRT-LM nebo llama.cpp
  * ([LiteRtOnDeviceAi]; knihovnu runtime nevidí ani tenhle modul, jen rozhraní enginu
  * :ai-engine a [LiteRtRuntime]). Na iOS je to Apple Intelligence (`AppleOnDeviceAi`). Který
- * se použije, určuje [ModelVariant.provider] a rozhoduje o tom [RoutingOnDeviceAi]. Kterou variantu
+ * se použije, určuje typ [ModelVariant] a rozhoduje o tom [RoutingOnDeviceAi]. Kterou variantu
  * dostane která úloha, je věc aplikace — zapnuté mohou být oba modely a každá úloha jde jinému.
+ *
+ * **Knihovna zná runtime, aplikace zná modely.** Které modely se dají stáhnout, dodává aplikace
+ * ([DownloadedModel]); knihovna o žádném konkrétním neví.
  *
  * Rozhraní, ne `expect class`: ViewModel se pak dá testovat s podstrčeným modelem.
  *
@@ -65,8 +68,8 @@ interface OnDeviceAi {
 
     /**
      * Umí model vrátit odpověď rovnou jako typ ([generateStructured]), ne jako text? Jen
-     * PŘIPRAVENÝ Gemini Nano, jehož AICore strukturovaný výstup hlásí; Gemma přes LiteRT-LM ho
-     * nemá. Kdo dostane `false`, pokračuje textem a vlastním parserem.
+     * PŘIPRAVENÝ Gemini Nano, jehož AICore strukturovaný výstup hlásí; stahované modely ho
+     * nemají. Kdo dostane `false`, pokračuje textem a vlastním parserem.
      */
     suspend fun supportsStructuredOutput(variant: ModelVariant): Boolean = false
 
@@ -78,11 +81,11 @@ interface OnDeviceAi {
      * nic neznamená. Kde strukturovaný výstup není ([supportsStructuredOutput] `false`), selže.
      */
     suspend fun <T : Any> generateStructured(variant: ModelVariant, prompt: String, type: KClass<T>): T =
-        throw OnDeviceAiException(AiFailureReason.Unavailable, variant.provider)
+        throw OnDeviceAiException(AiFailureReason.Unavailable, variant)
 
     /**
      * Umí model přepsat řeč ze zvuku ([transcribe])? Jen PŘIPRAVENÝ model se zvukovým vstupem
-     * (dnes Gemma 4; Gemini Nano přes ML Kit zvuk nebere). Levný dotaz, nic nenačítá.
+     * ([DownloadedModel.multimodal]; Gemini Nano přes ML Kit zvuk nebere). Levný dotaz, nic nenačítá.
      */
     suspend fun canTranscribe(variant: ModelVariant): Boolean = false
 
@@ -92,11 +95,11 @@ interface OnDeviceAi {
      * [generate]. Kde přepis není ([canTranscribe] `false`), selže.
      */
     fun transcribe(variant: ModelVariant, audioPath: String, prompt: String): Flow<Generated> =
-        flow { throw OnDeviceAiException(AiFailureReason.Unavailable, variant.provider) }
+        flow { throw OnDeviceAiException(AiFailureReason.Unavailable, variant) }
 
     /**
      * Umí model popsat obrázek ([describeImage])? Jen PŘIPRAVENÝ model s obrazovým vstupem
-     * (dnes Gemma 4; Gemini Nano přes Prompt API bere jen text). Levný dotaz, nic nenačítá.
+     * ([DownloadedModel.multimodal]; Gemini Nano přes Prompt API bere jen text). Levný dotaz, nic nenačítá.
      */
     suspend fun canDescribeImage(variant: ModelVariant): Boolean = false
 
@@ -106,7 +109,7 @@ interface OnDeviceAi {
      * Kde popis není ([canDescribeImage] `false`), selže.
      */
     fun describeImage(variant: ModelVariant, imagePath: String, prompt: String): Flow<Generated> =
-        flow { throw OnDeviceAiException(AiFailureReason.Unavailable, variant.provider) }
+        flow { throw OnDeviceAiException(AiFailureReason.Unavailable, variant) }
 
     /**
      * Smaže stažený model a uvolní místo. Jen tam, kde model stahuje aplikace sama
@@ -117,68 +120,34 @@ interface OnDeviceAi {
 }
 
 /**
- * Kterou podobu modelu chceme. Volby jsou PŘÁNÍ — co opravdu běží, řekne [ModelInfo.name].
- *
- * @property provider který runtime model počítá. Pro kterou úlohu který, vybírá aplikace.
- * @property preview (jen Gemini Nano) nejnovější verze v předběžném vydání místo stabilní.
- *   Bývá jen na novějších zařízeních a stahuje se zvlášť.
- * @property fast (jen Gemini Nano) rychlejší a méně přesná varianta místo plné.
- * @property gemma (jen Gemma) kterou velikost si aplikace stáhne.
- * @property qwen (jen Qwen) kterou velikost si aplikace stáhne.
- * @property euroLlm (jen EuroLLM) kterou velikost si aplikace stáhne.
- * @property aya (jen Aya) který soubor si aplikace stáhne; dnes je jediný.
+ * Který model chceme: typ určuje runtime, který ho počítá. Pro kterou úlohu který, vybírá aplikace.
  */
-data class ModelVariant(
-    val provider: AiProvider = AiProvider.GeminiNano,
-    val preview: Boolean = false,
-    val fast: Boolean = false,
-    val gemma: LiteRtModel = LiteRtModel.E2B,
-    val qwen: LiteRtModel = LiteRtModel.Qwen3_4B,
-    val euroLlm: LiteRtModel = LiteRtModel.EuroLlm9B,
-    val aya: LiteRtModel = LiteRtModel.AyaExpanse8B,
-) {
+sealed interface ModelVariant {
+
     /** Soubor, který si aplikace stáhne a počítá sama; `null` u systémového modelu. */
-    val model: LiteRtModel?
-        get() = when (provider) {
-            AiProvider.Gemma -> gemma
-            AiProvider.Qwen -> qwen
-            AiProvider.EuroLlm -> euroLlm
-            AiProvider.Aya -> aya
-            AiProvider.GeminiNano, AiProvider.Apple -> null
-        }
+    val model: DownloadedModel? get() = null
 
     /** Model stahuje a maže aplikace sama, ne systém. */
     val appManaged: Boolean get() = model != null
-}
 
-/**
- * Kdo model počítá.
- *
- * - [GeminiNano]: systémový model v AICore. Stahuje a aktualizuje ho telefon, aplikace nic
- *   nebalí, ale je jen na některých zařízeních a ML Kit nepustí k větším variantám.
- * - [Gemma]: otevřený model, který si stáhne aplikace (gigabajty) a počítá ho přes LiteRT-LM.
- *   Běží na každém dost silném telefonu a jde vybrat i větší E4B.
- * - [Qwen]: druhý otevřený model přes tentýž runtime, jen na text. Je tu kvůli češtině — jestli
- *   ji umí líp než Gemma, má ukázat porovnání modelů na skutečné konverzaci.
- * - [EuroLlm]: evropský otevřený model (EuroLLM a EuroMoE od utter-project), trénovaný na všech
- *   jazycích EU včetně češtiny. Jen text, přes llama.cpp ([ModelRuntime.LlamaCpp]) — ve formátu
- *   LiteRT-LM není.
- * - [Aya]: vícejazyčný model Aya Expanse od Cohere Labs, 23 jazyků včetně češtiny. Jen text, přes
- *   llama.cpp. **Licence CC BY-NC 4.0** (jen nekomerčně, s uvedením autora) — aplikace ji má ukázat
- *   před stažením, protože licenci přijímá uživatel, který si model stahuje.
- */
-enum class AiProvider {
-    GeminiNano,
-    Gemma,
-    Qwen,
-    EuroLlm,
-    Aya,
+    /**
+     * Systémový model v AICore. Stahuje a aktualizuje ho telefon, aplikace nic nebalí, ale je jen
+     * na některých zařízeních. Volby jsou PŘÁNÍ — co opravdu běží, řekne [ModelInfo.name].
+     *
+     * @property preview nejnovější verze v předběžném vydání místo stabilní. Bývá jen na novějších
+     *   zařízeních a stahuje se zvlášť.
+     * @property fast rychlejší a méně přesná varianta místo plné.
+     */
+    data class GeminiNano(val preview: Boolean = false, val fast: Boolean = false) : ModelVariant
 
     /**
      * Apple Intelligence (Foundation Models) na iOS 26+: systémový model jako Gemini Nano —
      * stahuje a aktualizuje ho systém, aplikace ho jen používá (`AppleOnDeviceAi`, Swift most).
      */
-    Apple,
+    data object Apple : ModelVariant
+
+    /** Soubor z katalogu aplikace, který se stáhne a počítá uvnitř procesu ([LiteRtOnDeviceAi]). */
+    data class Downloaded(override val model: DownloadedModel) : ModelVariant
 }
 
 /**
@@ -186,197 +155,69 @@ enum class AiProvider {
  * Jestli umí GPU, záleží na platformě (`LiteRtPlatform.gpu`).
  */
 enum class ModelRuntime {
-    /** LiteRT-LM (soubory `.litertlm`): Gemma a Qwen, Android i desktop. */
+    /** LiteRT-LM (soubory `.litertlm`), Android i desktop. */
     LiteRt,
 
-    /** llama.cpp (soubory GGUF): EuroLLM a Aya, Android i desktop; GPU jen Metal na Macu. */
+    /** llama.cpp (soubory GGUF), Android i desktop; GPU jen Metal na Macu. */
     LlamaCpp,
 }
 
 /**
- * Modely, které si aplikace umí stáhnout a počítá je sama — přes LiteRT-LM, nebo llama.cpp
- * ([runtime]). Jméno zůstalo z doby, kdy byl jen LiteRT-LM.
+ * Model, který si aplikace umí stáhnout a počítá ho sama přes LiteRT-LM, nebo llama.cpp ([runtime]).
+ * **Katalog drží aplikace**, knihovna žádný konkrétní model nezná.
  *
- * **Commit je součást adresy**, takže se stahuje pořád tentýž soubor, i když autor na Hugging
- * Face nahraje novější — nová verze = nový řádek tady, vědomě. Pod [minMemoryGb] se model
- * nenabízí, protože by systém aplikaci při načítání zabil. Jména položek se ukládají
- * (nastavení aplikace, jméno úlohy stahování), takže se nepřejmenovávají.
+ * Dvě instance se stejnými hodnotami jsou tentýž model (stav stahování, načtený engine).
  *
- * Pořadí položek téhož poskytovatele je pořadí, ve kterém se hledá náhrada za velikost, na
- * kterou zařízení nestačí (v Plume `supportedModels` v Nastavení). Qweny jdou od největšího, takže
- * telefon dostane největší, který unese; u Gemmy je první výchozí menší E2B.
- *
- * @property provider komu model patří: volba velikosti v Nastavení je jen mezi modely téhož.
- * @property multimodal bere i zvuk a obraz (přepis hlasovek, popis fotek), ne jen text.
- * @property contextTokens kolik tokenů (vstup i výstup dohromady) soubor unese; víc engine
- *   nedostane, ani když by aplikace chtěla delší kontext.
+ * @property id stálé: ukládá se (nastavení aplikace) a je ve jméně úlohy stahování a v jejích datech
+ *   (`AiModelDownloadWorker`), takže přejmenování ztratí rozběhnutou úlohu i uloženou volbu.
+ * @property url odkud se soubor stáhne. **Má mířit na pevnou verzi**, ať se stahuje pořád tentýž
+ *   soubor, i když autor nahraje novější ([huggingFaceUrl]).
+ * @property fileName jméno souboru v adresáři modelů a začátek jmen jeho keší ([ownsCacheFile]).
+ * @property sizeBytes velikost souboru; kolik se bude stahovat, než to řekne server.
+ * @property minMemoryGb pod touhle pamětí se model nenabízí, protože by systém aplikaci při načítání
+ *   zabil (`LiteRtPlatform.canRun`).
  * @property runtime čím se soubor počítá.
+ * @property contextTokens kolik tokenů (vstup i výstup dohromady) soubor unese; víc engine nedostane,
+ *   ani když by aplikace chtěla delší kontext. Strop dává i knihovna (8 192).
+ * @property multimodal bere i zvuk a obraz (přepis hlasovek, popis fotek), ne jen text.
  */
-enum class LiteRtModel(
+data class DownloadedModel(
+    val id: String,
     val displayName: String,
-    val provider: AiProvider,
-    val repository: String,
+    val url: String,
     val fileName: String,
-    val commit: String,
     val sizeBytes: Long,
     val minMemoryGb: Int,
-    val multimodal: Boolean,
+    val runtime: ModelRuntime,
     val contextTokens: Int = 8_192,
-    val runtime: ModelRuntime = ModelRuntime.LiteRt,
+    val multimodal: Boolean = false,
 ) {
-    // Gemma: soubor, commit, velikost i paměť z katalogu Google AI Edge Gallery
-    // (`model_allowlists/1_0_19.json`).
-    E2B(
-        displayName = "Gemma 4 E2B",
-        provider = AiProvider.Gemma,
-        repository = "litert-community/gemma-4-E2B-it-litert-lm",
-        fileName = "gemma-4-E2B-it.litertlm",
-        commit = "6e5c4f1e395deb959c494953478fa5cec4b8008f",
-        sizeBytes = 2_588_147_712,
-        minMemoryGb = 8,
-        multimodal = true,
-    ),
-    E4B(
-        displayName = "Gemma 4 E4B",
-        provider = AiProvider.Gemma,
-        repository = "litert-community/gemma-4-E4B-it-litert-lm",
-        fileName = "gemma-4-E4B-it.litertlm",
-        commit = "28299f30ee4d43294517a4ac93abd6163412f07f",
-        sizeBytes = 3_659_530_240,
-        minMemoryGb = 12,
-        multimodal = true,
-    ),
-
-    /*
-     * Qwen3 4B v Gallery není; soubor je z litert-community (Apache 2.0, bez souhlasu s licencí).
-     * Dynamický INT4 s GPU kompozity (export z 31. 10. 2026) potřebuje LiteRT-LM 0.19 — se
-     * starší verzí GPU engine na souboru s vnějšími vahami spadne (LiteRT-LM#3986). Paměť podle
-     * karty modelu: na 8GB Pixelu 8a při prvním výpočtu došla, proto 12 GB jako u E4B.
-     */
-    Qwen3_4B(
-        displayName = "Qwen3 4B",
-        provider = AiProvider.Qwen,
-        repository = "litert-community/Qwen3-4B",
-        fileName = "qwen3_4b_mixed_int4.litertlm",
-        commit = "2e62465be458fb02f7a92e339f98270f42dc9b32",
-        sizeBytes = 2_272_935_936,
-        minMemoryGb = 12,
-        multimodal = false,
-        contextTokens = 4_096,
-    ),
-
-    /** Qwen2.5 1,5B: soubor, commit, velikost i paměť z katalogu Gallery (`1_0_23.json`). */
-    Qwen2_5_1_5B(
-        displayName = "Qwen2.5 1.5B",
-        provider = AiProvider.Qwen,
-        repository = "litert-community/Qwen2.5-1.5B-Instruct",
-        fileName = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm",
-        commit = "5e6e7a58d03777898b31330a15d2e0a5a9107de3",
-        sizeBytes = 1_597_922_856,
-        minMemoryGb = 6,
-        multimodal = false,
-        contextTokens = 4_096,
-    ),
-
-    /*
-     * Qwen3 0,6B z litert-community, týž export jako Qwen3 4B (INT4, GPU kompozity, LiteRT-LM
-     * 0.19). Paměť: proces s ním podle karty modelu na Pixelu 8a sahá na ~1,9 GB, proto 4 GB.
-     */
-    Qwen3_0_6B(
-        displayName = "Qwen3 0.6B",
-        provider = AiProvider.Qwen,
-        repository = "litert-community/Qwen3-0.6B",
-        fileName = "Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm",
-        commit = "7c650468cc1598861b1a0deb0ab25be6b20cab13",
-        sizeBytes = 343_490_560,
-        minMemoryGb = 4,
-        multimodal = false,
-        contextTokens = 4_096,
-    ),
-
-    /*
-     * EuroLLM 9B Instruct (verze 2512) od utter-project, Apache 2.0, GGUF Q4_K_M od mradermacher
-     * (originál je za souhlasem, kvantizace ne). Kontext 4 096 kvůli paměti: KV keš 9B modelu roste
-     * s délkou a soubor sám má 5,6 GB. Paměť 16 GB — 12GB telefon by po načtení měl na zbytek
-     * systému a aplikace jen pár GB.
-     */
-    EuroLlm9B(
-        displayName = "EuroLLM 9B",
-        provider = AiProvider.EuroLlm,
-        repository = "mradermacher/EuroLLM-9B-Instruct-2512-GGUF",
-        fileName = "EuroLLM-9B-Instruct-2512.Q4_K_M.gguf",
-        commit = "5138603fccb9dc1f35c25cfd1a4981a78617e9ff",
-        sizeBytes = 5_582_838_912,
-        minMemoryGb = 16,
-        multimodal = false,
-        contextTokens = 4_096,
-        runtime = ModelRuntime.LlamaCpp,
-    ),
-
-    /*
-     * EuroMoE 2,6B (aktivních 0,6B) Instruct 2512 od utter-project: směs expertů, takže počítá
-     * rychlostí malého modelu a zná jazyky jako větší. Apache 2.0, GGUF Q4_K_M od mradermacher.
-     */
-    EuroMoe2_6B(
-        displayName = "EuroMoE 2.6B",
-        provider = AiProvider.EuroLlm,
-        repository = "mradermacher/EuroMoE-2.6B-A0.6B-Instruct-2512-GGUF",
-        fileName = "EuroMoE-2.6B-A0.6B-Instruct-2512.Q4_K_M.gguf",
-        commit = "11be4a9e68eb5aba18e4c3b341cbef2d018b2da0",
-        sizeBytes = 1_616_056_480,
-        minMemoryGb = 6,
-        multimodal = false,
-        contextTokens = 4_096,
-        runtime = ModelRuntime.LlamaCpp,
-    ),
-
-    /*
-     * Aya Expanse 8B od Cohere Labs (architektura Command R), CC BY-NC 4.0 a pravidla použití
-     * Cohere Labs. GGUF Q4_K_M od bartowski — originál je za souhlasem a sdílením kontaktu,
-     * kvantizace ne; licence nekomerční šíření s uvedením autora dovoluje. Jediná velikost
-     * (druhá je 32B), paměť a kontext jako EuroLLM 9B: soubor má 5,1 GB.
-     */
-    AyaExpanse8B(
-        displayName = "Aya Expanse 8B",
-        provider = AiProvider.Aya,
-        repository = "bartowski/aya-expanse-8b-GGUF",
-        fileName = "aya-expanse-8b-Q4_K_M.gguf",
-        commit = "f9d62ed0c58e6f2ae17975df990b1b8a4013b596",
-        sizeBytes = 5_056_982_720,
-        minMemoryGb = 16,
-        multimodal = false,
-        contextTokens = 4_096,
-        runtime = ModelRuntime.LlamaCpp,
-    ),
-    ;
-
     /** Varianta, která tenhle soubor počítá — na dotazy po souborech (Úložiště, dostupnost). */
-    val variant: ModelVariant
-        get() = when (provider) {
-            AiProvider.Gemma -> ModelVariant(provider = provider, gemma = this)
-            AiProvider.Qwen -> ModelVariant(provider = provider, qwen = this)
-            AiProvider.EuroLlm -> ModelVariant(provider = provider, euroLlm = this)
-            AiProvider.Aya -> ModelVariant(provider = provider, aya = this)
-            AiProvider.GeminiNano, AiProvider.Apple -> ModelVariant(provider = provider)
-        }
-
-    val downloadUrl: String
-        get() = "https://huggingface.co/$repository/resolve/$commit/$fileName?download=true"
+    val variant: ModelVariant get() = ModelVariant.Downloaded(this)
 
     /**
      * Patří soubor [name] z keše runtime k tomuhle modelu? LiteRT-LM si při prvním načtení
      * zkompiluje model pro procesor a uloží ho vedle (`<soubor>_<čas>_<velikost>.xnnpack_cache`,
-     * u Gemmy navíc `….audio_adapter.xnnpack_cache` a `….static_audio_encoder.xnnpack_cache`).
+     * u modelu se zvukem navíc `….audio_adapter.xnnpack_cache` a `….static_audio_encoder.xnnpack_cache`).
      * Pokus o GPU nechá i keš pro grafiku (`…_mldrift_weight_cache.bin` a
      * `…_mldrift_program_cache.bin`), a to i když GPU nakonec selže a jede se na procesoru.
-     * Keš je velká skoro jako model (Gemma 4 E4B 2,3 GB) a bez smazání s modelem zůstávala.
+     * Keš je velká skoro jako model a bez smazání s modelem zůstávala. llama.cpp keš modelu na disk nedělá.
      */
-    fun ownsCacheFile(name: String): Boolean =
-        name.startsWith("${fileName}_") && CACHE_SUFFIXES.any { name.endsWith(it) }
+    fun ownsCacheFile(name: String): Boolean = when (runtime) {
+        ModelRuntime.LiteRt -> name.startsWith("${fileName}_") && LITERT_CACHE_SUFFIXES.any { name.endsWith(it) }
+        ModelRuntime.LlamaCpp -> false
+    }
 }
 
+/**
+ * Adresa souboru [file] z repozitáře [repo] na Hugging Face. **Commit je součást adresy**, takže se
+ * stahuje pořád tentýž soubor, i když autor nahraje novější — nová verze je vědomá změna v katalogu.
+ */
+fun huggingFaceUrl(repo: String, commit: String, file: String): String =
+    "https://huggingface.co/$repo/resolve/$commit/$file?download=true"
+
 /** Přípony keší LiteRT-LM 0.19 (řetězce z `liblitertlm_jni.so`): procesor a GPU (ML Drift). */
-private val CACHE_SUFFIXES = listOf(
+private val LITERT_CACHE_SUFFIXES = listOf(
     ".xnnpack_cache",
     "_mldrift_weight_cache.bin",
     "_mldrift_program_cache.bin",
