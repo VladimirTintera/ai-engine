@@ -30,10 +30,7 @@ fun main() {
     val playground = desktopPlayground(desktopDataDir())
     application {
         Window(
-            onCloseRequest = {
-                EngineStats.closeOpenEngine()
-                exitApplication()
-            },
+            onCloseRequest = ::exitApplication,
             title = "AI Engine Playground",
             state = rememberWindowState(width = 960.dp, height = 900.dp),
         ) {

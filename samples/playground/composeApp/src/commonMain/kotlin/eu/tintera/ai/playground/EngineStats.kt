@@ -9,7 +9,6 @@ import eu.tintera.ai.engine.LlmEngine
 import eu.tintera.ai.engine.LlmEngineConfig
 import eu.tintera.ai.engine.LlmEngineFactory
 import eu.tintera.ai.engine.LlmSampling
-import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.incrementAndFetch
@@ -36,19 +35,6 @@ object EngineStats {
 
     /** Kousků odpovědi od spuštění procesu; llama.cpp i LiteRT-LM vydávají zhruba token na kousek. */
     val chunks = AtomicLong(0)
-
-    /** Načtený engine (knihovna drží nejvýš jeden), aby šel před koncem procesu zavřít. */
-    internal val open = AtomicReference<LlmEngine?>(null)
-
-    /**
-     * Zavře načtený engine před ukončením aplikace. Na macOS llama.cpp při konci procesu
-     * s nezavřeným modelem spadne (`GGML_ASSERT([rsets->data count] == 0)` ve statickém
-     * destruktoru ggml-metal) a systém pak hlásí pád aplikace. Knihovna engine sama uvolní až
-     * po nečinnosti a veřejné „uvolni teď" nemá; volá se jen při ukončení, kdy už nic negeneruje.
-     */
-    fun closeOpenEngine() {
-        open.exchange(null)?.close()
-    }
 }
 
 /** [LiteRtRuntime], který měří načtení modelu a počítá kousky odpovědi ([EngineStats]). */
@@ -68,7 +54,7 @@ private class TimedFactory(private val delegate: LlmEngineFactory) : LlmEngineFa
             val engine = delegate.open(config)
             EngineStats.loads.incrementAndFetch()
             EngineStats.lastBackend.store(config.backend)
-            return TimedEngine(engine).also { EngineStats.open.store(it) }
+            return TimedEngine(engine)
         } finally {
             EngineStats.totalLoadMs.addAndFetch(start.elapsedNow().inWholeMilliseconds)
         }
@@ -76,17 +62,9 @@ private class TimedFactory(private val delegate: LlmEngineFactory) : LlmEngineFa
 }
 
 private class TimedEngine(private val delegate: LlmEngine) : LlmEngine {
-    private val closed = AtomicBoolean(false)
-
     override fun conversation(sampling: LlmSampling): LlmConversation = TimedConversation(delegate.conversation(sampling))
 
-    /** Jednou: zavřít ho může knihovna (nečinnost, jiný model) i [EngineStats.closeOpenEngine]. */
-    override fun close() {
-        if (!closed.exchange(true)) {
-            EngineStats.open.compareAndSet(this, null)
-            delegate.close()
-        }
-    }
+    override fun close() = delegate.close()
 }
 
 private class TimedConversation(private val delegate: LlmConversation) : LlmConversation {

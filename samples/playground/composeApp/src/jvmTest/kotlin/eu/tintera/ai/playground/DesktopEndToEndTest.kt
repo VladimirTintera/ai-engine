@@ -71,9 +71,10 @@ class DesktopEndToEndTest {
             answers.forEach { println("ANSWER: ${it.text}\nMETRICS: ${it.metrics}") }
             assertTrue(answers.size == 2 && answers.all { it.error == null && it.text.isNotBlank() })
             assertTrue(answers.first().metrics?.loadMs != null, "the first answer loads the model")
+            // Knihovna skládá prompt šablonou modelu s vypnutým přemýšlením (Qwen3 bez `<think>`).
+            assertTrue(answers.none { "<think>" in it.text }, "thinking should be off")
         }
-        // Jako při zavření okna aplikace: bez toho llama.cpp na macOS při konci procesu spadne.
-        EngineStats.closeOpenEngine()
+        // Model zůstává načtený: uvolní ho knihovna při konci JVM (dřív na macOS pád při ukončení).
     }
 
     private fun androidx.compose.ui.test.ComposeUiTest.send(text: String) {

@@ -18,7 +18,6 @@ import eu.tintera.ai.playground.formatBytes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -96,13 +95,7 @@ class ModelManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DownloadStoppedException) {
-                // Pozastavil uživatel: stažená část zůstává, stav bude Paused. Na iOS ale
-                // `stopDownload` pozastavení jen spustí a resume data systém uloží o chvíli později;
-                // `status` mezitím hlásí Downloadable. Proto se stav ověří ještě jednou.
-                scope.launch {
-                    delay(PAUSE_SETTLE_MS)
-                    refresh(variant)
-                }
+                // Pozastavil uživatel: stažená část zůstává, stav (Paused) zjistí `refresh` níž.
             } catch (e: Exception) {
                 set(variant) { it.copy(error = describe(e, variant.model)) }
             } finally {
@@ -164,10 +157,6 @@ class ModelManager(
     fun catalogVariant(variant: ModelVariant): CatalogVariant? =
         Catalog.asSequence().flatMap { it.models }.flatMap { it.variants }.firstOrNull { it.model.variant == variant }
             ?: _custom.value.map { it.variant }.firstOrNull { it.model.variant == variant }
-
-    private companion object {
-        const val PAUSE_SETTLE_MS = 1_500L
-    }
 
     private fun set(variant: ModelVariant, change: (ModelState) -> ModelState) {
         _states.update { it + (variant to change(it[variant] ?: ModelState())) }

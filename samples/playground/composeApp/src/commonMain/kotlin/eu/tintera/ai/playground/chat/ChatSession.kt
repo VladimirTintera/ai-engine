@@ -29,35 +29,7 @@ data class ChatMessage(
     val error: String? = null,
     /** Kolik nejstarších tahů se kvůli limitu do promptu nevešlo. */
     val droppedTurns: Int = 0,
-) {
-    private val parts by lazy { splitThinking(text) }
-
-    /** Přemýšlení modelu (`<think>…</think>`), když ho vypsal; `null` = bez něj. */
-    val thinking: String? get() = parts.first
-
-    /** Odpověď bez přemýšlení; ta jde i do historie. */
-    val answer: String get() = parts.second
-}
-
-/**
- * Oddělí přemýšlení od odpovědi. Rozhraní enginu slibuje přemýšlení vypnuté, ale llama.cpp skládá
- * prompt starší šablonou bez `enable_thinking`, takže Qwen3 (a jiné „thinking" modely) blok
- * `<think>` vypíšou stejně. Obrazovka ho ukáže zvlášť a do historie nejde — zbytečně by zabíral
- * kontext.
- */
-fun splitThinking(text: String): Pair<String?, String> {
-    val trimmed = text.trimStart()
-    if (!trimmed.startsWith(THINK_START)) return null to text
-    val end = trimmed.indexOf(THINK_END)
-    return if (end < 0) {
-        trimmed.removePrefix(THINK_START).trim() to ""
-    } else {
-        trimmed.substring(THINK_START.length, end).trim() to trimmed.substring(end + THINK_END.length).trim()
-    }
-}
-
-private const val THINK_START = "<think>"
-private const val THINK_END = "</think>"
+)
 
 /**
  * Měření jedné odpovědi.
@@ -198,8 +170,8 @@ class ChatSession(
     private fun turns(): List<Turn> {
         val list = _messages.value
         return list.zipWithNext()
-            .filter { (user, answer) -> user.fromUser && !answer.fromUser && answer.error == null && answer.answer.isNotBlank() }
-            .map { (user, answer) -> Turn(user.text, answer.answer) }
+            .filter { (user, answer) -> user.fromUser && !answer.fromUser && answer.error == null && answer.text.isNotBlank() }
+            .map { (user, answer) -> Turn(user.text, answer.text) }
     }
 
     private fun edit(id: Long, change: (ChatMessage) -> ChatMessage) {

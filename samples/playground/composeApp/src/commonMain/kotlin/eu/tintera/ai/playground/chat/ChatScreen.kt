@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import eu.tintera.ai.engine.LlmBackend
 import eu.tintera.ai.playground.formatSeconds
@@ -147,19 +146,9 @@ private fun MessageBubble(message: ChatMessage) {
                 modifier = Modifier.widthIn(max = 560.dp),
             ) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    message.thinking?.let { thinking ->
-                        Text("Thinking", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                        Text(
-                            thinking,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontStyle = FontStyle.Italic,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = if (message.answer.isNotEmpty()) 8.dp else 0.dp),
-                        )
-                    }
                     when {
-                        message.answer.isNotEmpty() -> SelectionContainer { Text(message.answer, style = MaterialTheme.typography.bodyLarge) }
-                        message.streaming && message.thinking == null -> LoadingIndicator(Modifier.size(36.dp))
+                        message.text.isNotEmpty() -> SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
+                        message.streaming -> LoadingIndicator(Modifier.size(36.dp))
                     }
                     message.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 }

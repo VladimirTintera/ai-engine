@@ -52,13 +52,6 @@ class ConversationPromptTest {
     }
 
     @Test
-    fun thinkingIsSplitFromTheAnswer() {
-        assertEquals(null to "Prague.", splitThinking("Prague."))
-        assertEquals("Hmm, capital." to "Prague.", splitThinking("<think>\nHmm, capital.\n</think>\n\nPrague."))
-        assertEquals("still thinking" to "", splitThinking("<think>still thinking"))
-    }
-
-    @Test
     fun suggestedMemoryGrowsWithTheFile() {
         assertEquals(2, suggestedMinMemoryGb(396_705_472))
         assertEquals(12, suggestedMinMemoryGb(5_027_783_488))
