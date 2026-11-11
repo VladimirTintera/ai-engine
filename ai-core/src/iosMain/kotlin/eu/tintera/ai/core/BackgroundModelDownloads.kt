@@ -1,7 +1,6 @@
 package eu.tintera.ai.core
 
 import co.touchlab.kermit.Logger
-import kotlin.concurrent.atomics.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -48,26 +47,38 @@ import platform.darwin.dispatch_time
  * aplikace nebyla spuštěná, se zpracuje až při jejím dalším spuštění a systém aplikaci po
  * dokončení neprobudí (README, „iOS").
  *
- * Používá ho [IosLiteRtPlatform]; sezení je jedno na proces, proto objekt, ne instance platformy.
+ * Sezení jsou dvě: pro všechny sítě ([sessionIdentifier]) a „jen přes Wi-Fi"
+ * ([wifiSessionIdentifier], `allowsExpensiveNetworkAccess = false`). Podmínka musí být na sezení,
+ * ne na požadavku: úloha navázaná z resume data si nese původní požadavek a ten změnit nejde.
+ *
+ * Používá ho [IosLiteRtPlatform]; sezení se stejným identifikátorem smí být v procesu jen jedno,
+ * proto objekt, ne instance platformy.
  */
 object IosModelDownloads {
 
-    /** Identifikátor sezení na pozadí: id balíčku aplikace + `.ai-models`. */
+    /** Identifikátor sezení na pozadí pro všechny sítě: id balíčku aplikace + `.ai-models`. */
     val sessionIdentifier: String = "${NSBundle.mainBundle.bundleIdentifier ?: "eu.tintera.ai"}.ai-models"
+
+    /** Identifikátor sezení „jen přes Wi-Fi": [sessionIdentifier] + `.wifi`. */
+    val wifiSessionIdentifier: String = "$sessionIdentifier.wifi"
 
     internal val downloads: BackgroundModelDownloads by lazy {
         BackgroundModelDownloads(
-            configuration = {
-                NSURLSessionConfiguration.backgroundSessionConfigurationWithIdentifier(sessionIdentifier).apply {
+            configuration = { unmeteredOnly ->
+                val identifier = if (unmeteredOnly) wifiSessionIdentifier else sessionIdentifier
+                NSURLSessionConfiguration.backgroundSessionConfigurationWithIdentifier(identifier).apply {
                     // Stahování si vyžádal uživatel: ne „až se to systému hodí" (discretionary), a po
                     // dokončení se aplikace má probudit, aby soubor přesunula a stav ukázal hotovo.
                     discretionary = false
                     sessionSendsLaunchEvents = true
                     requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData
                     URLCache = null
+                    // Mobilní data a hotspot; na nich úloha počká, systém ji pustí na Wi-Fi sám.
+                    allowsExpensiveNetworkAccess = !unmeteredOnly
                 }
             },
             modelsDir = { iosModelsDir },
+            metered = IosNetworkPath::expensive,
         )
     }
 
@@ -78,8 +89,12 @@ object IosModelDownloads {
      * hlavním vlákně, až soubor zpracuje.
      */
     fun handleEventsForBackgroundURLSession(identifier: String, completionHandler: () -> Unit): Boolean {
-        if (identifier != sessionIdentifier) return false
-        downloads.handleEvents(completionHandler)
+        val unmeteredOnly = when (identifier) {
+            sessionIdentifier -> false
+            wifiSessionIdentifier -> true
+            else -> return false
+        }
+        downloads.handleEvents(unmeteredOnly, completionHandler)
         return true
     }
 }
@@ -101,12 +116,18 @@ object IosModelDownloads {
  * - **Úloha z minulého běhu procesu se jen připojí** ([download]): sezení se stejným
  *   identifikátorem po spuštění vrátí běžící úlohy (`getAllTasks`), poznají se podle
  *   `taskDescription` = jméno souboru.
- * - **Všechen stav jen na frontě sezení** ([queue], sériová); na ní volá i delegát.
+ * - **„Jen přes Wi-Fi" je druhé sezení** ([configuration] s `true`). Změna volby u běžící úlohy
+ *   ([setNetwork], i připojení s jinou volbou v [download]) ji zastaví s resume daty a naváže
+ *   ve druhém sezení; kdo na úlohu čeká, čeká dál na tu novou ([SWITCHING]).
+ * - **Všechen stav jen na frontě sezení** ([queue], sériová); na ní volá i delegát obou sezení.
  */
 @OptIn(ExperimentalForeignApi::class)
 internal class BackgroundModelDownloads(
-    private val configuration: () -> NSURLSessionConfiguration,
+    /** Konfigurace sezení; `true` = jen neplacená síť. */
+    private val configuration: (unmeteredOnly: Boolean) -> NSURLSessionConfiguration,
     private val modelsDir: () -> String,
+    /** Je síť teď placená? Jen pro stav „čeká na Wi-Fi" na začátku stahování. */
+    private val metered: () -> Boolean = { false },
 ) : ModelFileDownloader {
 
     private val logger = Logger.withTag("OnDeviceAi")
@@ -116,14 +137,23 @@ internal class BackgroundModelDownloads(
         name = "eu.tintera.ai.model-downloads"
     }
 
-    private val session: NSURLSession by lazy {
-        NSURLSession.sessionWithConfiguration(configuration(), delegate = Delegate(this), delegateQueue = queue)
+    private val delegate = Delegate(this)
+
+    private val anyNetworkSession = lazy {
+        NSURLSession.sessionWithConfiguration(configuration(false), delegate = delegate, delegateQueue = queue)
     }
+
+    private val wifiSession = lazy {
+        NSURLSession.sessionWithConfiguration(configuration(true), delegate = delegate, delegateQueue = queue)
+    }
+
+    private fun session(unmeteredOnly: Boolean): NSURLSession =
+        if (unmeteredOnly) wifiSession.value else anyNetworkSession.value
 
     // --- Jen na [queue]. ---
 
     /** Běžící úloha podle jména souboru. */
-    private val tasks = mutableMapOf<String, NSURLSessionDownloadTask>()
+    private val tasks = mutableMapOf<String, Live>()
 
     /** Kdo čeká na konec úlohy ([download]). */
     private val waiters = mutableMapOf<String, MutableList<Waiter>>()
@@ -132,14 +162,15 @@ internal class BackgroundModelDownloads(
     private val finished = mutableMapOf<ULong, Result<Unit>>()
 
     /** Zastavené úlohy, jejichž resume data ještě nedorazila; nová úloha na ně počká. */
-    private val pausing = mutableMapOf<String, CompletableDeferred<Unit>>()
+    private val pausing = mutableMapOf<String, Pause>()
 
     /** Smazané modely: resume data, která dorazí pozdě, se už neuloží. */
     private val discarded = mutableSetOf<String>()
 
     // ---
 
-    private val eventsDone = AtomicReference<(() -> Unit)?>(null)
+    /** Čeká systém na dokončení událostí sezení (podle [configuration])? */
+    private val eventsDone = ConcurrentMap<Boolean, () -> Unit>()
 
     /**
      * Úlohy z minulého běhu procesu jsou načtené a jejich události doručené. Úlohu, kterou zrušil
@@ -155,29 +186,37 @@ internal class BackgroundModelDownloads(
     /** Úlohy, jejichž `didCompleteWithError` přišlo dřív, než se načetly všechny úlohy. Jen na [queue]. */
     private val completedBeforeRestore = mutableSetOf<ULong>()
 
+    /** Sezení, jejichž úlohy se ještě nenačetly. Jen na [queue]. */
+    private var sessionsToRestore = 2
+
     private val restoreStarted: Unit by lazy {
-        session.getAllTasksWithCompletionHandler { all ->
-            queue.addOperationWithBlock {
-                all.orEmpty().filterIsInstance<NSURLSessionDownloadTask>().forEach { task ->
-                    val name = task.taskDescription ?: return@forEach
-                    when (task.state) {
-                        NSURLSessionTaskStateRunning, NSURLSessionTaskStateSuspended -> {
-                            logger.i { "Stahování $name běží z minulého spuštění" }
-                            tasks.getOrPut(name) { task }
-                        }
-                        else -> if (task.taskIdentifier !in completedBeforeRestore) awaitingEvents += task.taskIdentifier
-                    }
+        listOf(false, true).forEach { unmeteredOnly ->
+            session(unmeteredOnly).getAllTasksWithCompletionHandler { all ->
+                queue.addOperationWithBlock { restoreTasks(unmeteredOnly, all.orEmpty()) }
+            }
+        }
+    }
+
+    private fun restoreTasks(unmeteredOnly: Boolean, all: List<*>) {
+        all.filterIsInstance<NSURLSessionDownloadTask>().forEach { task ->
+            val name = task.taskDescription ?: return@forEach
+            when (task.state) {
+                NSURLSessionTaskStateRunning, NSURLSessionTaskStateSuspended -> {
+                    logger.i { "Stahování $name běží z minulého spuštění${if (unmeteredOnly) " (jen Wi-Fi)" else ""}" }
+                    tasks.getOrPut(name) { Live(task, unmeteredOnly) }
                 }
-                completedBeforeRestore.clear()
-                if (awaitingEvents.isEmpty()) {
+                else -> if (task.taskIdentifier !in completedBeforeRestore) awaitingEvents += task.taskIdentifier
+            }
+        }
+        if (--sessionsToRestore > 0) return
+        completedBeforeRestore.clear()
+        if (awaitingEvents.isEmpty()) {
+            restored.complete(Unit)
+        } else {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, RESTORE_TIMEOUT_NS), dispatch_get_main_queue()) {
+                queue.addOperationWithBlock {
+                    if (!restored.isCompleted) logger.w { "Události úloh z minulého spuštění nepřišly: $awaitingEvents" }
                     restored.complete(Unit)
-                } else {
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, RESTORE_TIMEOUT_NS), dispatch_get_main_queue()) {
-                        queue.addOperationWithBlock {
-                            if (!restored.isCompleted) logger.w { "Události úloh z minulého spuštění nepřišly: $awaitingEvents" }
-                            restored.complete(Unit)
-                        }
-                    }
                 }
             }
         }
@@ -188,36 +227,68 @@ internal class BackgroundModelDownloads(
         restored.await()
     }
 
-    override suspend fun download(model: DownloadedModel, onProgress: (ModelDownload) -> Unit) {
+    override suspend fun download(model: DownloadedModel, unmeteredOnly: Boolean, onProgress: (ModelDownload) -> Unit) {
         awaitRestored()
         val name = model.fileName
-        onQueue { pausing[name] }?.await()
-        val done = CompletableDeferred<Unit>()
-        val task = onQueue { attachOrStart(model, Waiter(model, onProgress, done)) } ?: return
+        onQueue { pausing[name]?.takeIf { it.then == null } }?.done?.await()
+        // Než přijde první průběh: co je stažené, a jestli se na placené síti čeká na Wi-Fi.
+        onProgress(
+            ModelDownload(
+                partialBytes(model) ?: 0L,
+                model.sizeBytes,
+                waitingForNetwork = unmeteredOnly && metered(),
+                wifiOnly = unmeteredOnly,
+            ),
+        )
+        val waiter = Waiter(model, onProgress, CompletableDeferred())
+        if (!onQueue { attachOrStart(model, unmeteredOnly, waiter) }) return
         try {
-            done.await()
+            waiter.done.await()
         } catch (e: CancellationException) {
             queue.addOperationWithBlock {
-                waiters[name]?.removeAll { it.done === done }
-                pauseOnQueue(name, task)
+                waiters[name]?.remove(waiter)
+                if (waiter.taskId == SWITCHING) {
+                    // Přepnutí sítě ještě nedoběhlo: novou úlohu už nezakládat, nečeká-li na ni nikdo.
+                    if (waiters[name].orEmpty().none { it.taskId == SWITCHING }) pausing[name]?.then = null
+                } else if (tasks[name]?.task?.taskIdentifier == waiter.taskId) {
+                    pauseOnQueue(name)
+                }
             }
             throw e
         }
     }
 
-    /** Připojí se k běžící úloze, nebo založí novou (z resume data, když jsou); `null` = soubor už je. */
-    private fun attachOrStart(model: DownloadedModel, waiter: Waiter): NSURLSessionDownloadTask? {
+    /**
+     * Připojí se k běžící úloze, nebo založí novou (z resume data, když jsou); `false` = soubor už
+     * je. Běžící úloha s jinou podmínkou sítě se přepne ([switchOnQueue]).
+     */
+    private fun attachOrStart(model: DownloadedModel, unmeteredOnly: Boolean, waiter: Waiter): Boolean {
         val name = model.fileName
-        if (Path(file(name)).exists()) return null
+        if (Path(file(name)).exists()) return false
         discarded -= name
-        val task = tasks[name] ?: newTask(model).also { tasks[name] = it }
-        waiter.taskId = task.taskIdentifier
         waiters.getOrPut(name) { mutableListOf() } += waiter
-        task.resume()
-        return task
+        val pending = pausing[name]
+        when {
+            // Přepnutí už běží; nová úloha převezme i tohohle.
+            pending?.then != null -> {
+                waiter.taskId = SWITCHING
+                pending.then = { startOnQueue(model, unmeteredOnly) }
+            }
+            tasks[name]?.let { it.unmeteredOnly != unmeteredOnly } == true -> {
+                waiter.taskId = SWITCHING
+                switchOnQueue(model, unmeteredOnly)
+            }
+            else -> {
+                val live = tasks[name] ?: newTask(model, unmeteredOnly).also { tasks[name] = it }
+                waiter.taskId = live.task.taskIdentifier
+                live.task.resume()
+            }
+        }
+        return true
     }
 
-    private fun newTask(model: DownloadedModel): NSURLSessionDownloadTask {
+    private fun newTask(model: DownloadedModel, unmeteredOnly: Boolean): Live {
+        val session = session(unmeteredOnly)
         val resume = resumeFile(model.fileName)
         val data = NSData.dataWithContentsOfFile(resume)
         val task = if (data != null) {
@@ -232,20 +303,65 @@ internal class BackgroundModelDownloads(
         // Resume data jdou použít jen jednou; nová dá systém při dalším přerušení.
         deleteFile(resume)
         task.taskDescription = model.fileName
-        return task
+        return Live(task, unmeteredOnly)
     }
 
-    /** Zastaví úlohu tak, aby z ní zbyla resume data; nová úloha na ně počká ([pausing]). */
-    private fun pauseOnQueue(name: String, task: NSURLSessionDownloadTask? = tasks[name]) {
-        if (task == null || tasks[name] != task) return
-        tasks.remove(name)
-        val paused = CompletableDeferred<Unit>()
-        pausing[name] = paused
-        task.cancelByProducingResumeData { data ->
+    /**
+     * Zastaví úlohu tak, aby z ní zbyla resume data; nová úloha na ně počká ([pausing]). S [then]
+     * se po jejich uložení rovnou spustí další (přepnutí sítě).
+     */
+    private fun pauseOnQueue(name: String, then: (() -> Unit)? = null) {
+        val live = tasks.remove(name) ?: return
+        val pause = Pause(CompletableDeferred(), then)
+        pausing[name] = pause
+        live.task.cancelByProducingResumeData { data ->
             queue.addOperationWithBlock {
                 if (data != null) saveResume(name, data)
-                if (pausing[name] === paused) pausing.remove(name)
-                paused.complete(Unit)
+                if (pausing[name] === pause) pausing.remove(name)
+                pause.done.complete(Unit)
+                pause.then?.invoke()
+            }
+        }
+    }
+
+    /**
+     * Běžící úlohu [model] přenese do sezení s podmínkou [unmeteredOnly]: zastaví ji s resume daty
+     * a z nich založí novou. Čekající přejdou na novou úlohu; dokončení té staré (zrušení) je mine.
+     */
+    private fun switchOnQueue(model: DownloadedModel, unmeteredOnly: Boolean) {
+        val name = model.fileName
+        val old = tasks[name] ?: return
+        waiters[name]?.filter { it.taskId == old.task.taskIdentifier }?.forEach { it.taskId = SWITCHING }
+        logger.i { "Stahování ${model.displayName} přechází na ${if (unmeteredOnly) "jen Wi-Fi" else "všechny sítě"}" }
+        pauseOnQueue(name) { startOnQueue(model, unmeteredOnly) }
+    }
+
+    /** Dokončení přepnutí: nová úloha, na kterou přejdou čekající ze [SWITCHING]. */
+    private fun startOnQueue(model: DownloadedModel, unmeteredOnly: Boolean) {
+        val name = model.fileName
+        val switching = waiters[name].orEmpty().filter { it.taskId == SWITCHING }
+        if (name in discarded || Path(file(name)).exists()) return
+        try {
+            val live = tasks[name] ?: newTask(model, unmeteredOnly).also { tasks[name] = it }
+            switching.forEach { it.taskId = live.task.taskIdentifier }
+            live.task.resume()
+        } catch (e: Exception) {
+            waiters[name]?.removeAll(switching)
+            switching.forEach { it.done.completeExceptionally(e) }
+        }
+    }
+
+    /**
+     * Změna „jen přes Wi-Fi" u běžící (nebo na síť čekající) úlohy, i bez čekající korutiny
+     * (úloha z minulého spuštění). Nic neběží-li, nic nespustí.
+     */
+    suspend fun setNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {
+        awaitRestored()
+        onQueue {
+            val pending = pausing[model.fileName]
+            when {
+                pending?.then != null -> pending.then = { startOnQueue(model, unmeteredOnly) }
+                tasks[model.fileName]?.let { it.unmeteredOnly != unmeteredOnly } == true -> switchOnQueue(model, unmeteredOnly)
             }
         }
     }
@@ -253,13 +369,22 @@ internal class BackgroundModelDownloads(
     /** Zastaví stahování [model] i bez čekající korutiny (úloha z minulého spuštění). */
     suspend fun pause(model: DownloadedModel) {
         awaitRestored()
-        onQueue { pauseOnQueue(model.fileName) }
+        onQueue {
+            pausing[model.fileName]?.then = null
+            pauseOnQueue(model.fileName)
+        }
     }
 
     /** Běží (nebo čeká na síť) úloha [model]? I z minulého běhu procesu. */
     suspend fun running(model: DownloadedModel): Boolean {
         awaitRestored()
-        return onQueue { model.fileName in tasks }
+        return onQueue { model.fileName in tasks || pausing[model.fileName]?.then != null }
+    }
+
+    /** Stahuje se [model] jen přes Wi-Fi? `null` = neběží. Pro testy. */
+    internal suspend fun runningUnmeteredOnly(model: DownloadedModel): Boolean? {
+        awaitRestored()
+        return onQueue { tasks[model.fileName]?.unmeteredOnly }
     }
 
     override fun partialBytes(model: DownloadedModel): Long? {
@@ -272,22 +397,25 @@ internal class BackgroundModelDownloads(
         val name = model.fileName
         onQueue {
             discarded += name
-            tasks.remove(name)?.cancel()
-            pausing.remove(name)?.complete(Unit)
+            tasks.remove(name)?.task?.cancel()
+            pausing.remove(name)?.let { pause ->
+                pause.then = null
+                pause.done.complete(Unit)
+            }
             deleteFile(resumeFile(name))
         }
     }
 
     /** Viz [IosModelDownloads.handleEventsForBackgroundURLSession]. */
-    fun handleEvents(completionHandler: () -> Unit) {
-        eventsDone.store(completionHandler)
+    fun handleEvents(unmeteredOnly: Boolean, completionHandler: () -> Unit) {
+        eventsDone[unmeteredOnly] = completionHandler
         // Sezení se stejným identifikátorem musí existovat, jinak události nepřijdou.
-        session
+        session(unmeteredOnly)
     }
 
-    /** Jen pro testy s obyčejným sezením: sezení na pozadí žije s procesem. */
+    /** Jen pro testy s obyčejnými sezeními: sezení na pozadí žijí s procesem. */
     internal fun invalidate() {
-        session.invalidateAndCancel()
+        listOf(anyNetworkSession, wifiSession).filter { it.isInitialized() }.forEach { it.value.invalidateAndCancel() }
     }
 
     // --- Delegát, vždycky na [queue]. ---
@@ -333,7 +461,7 @@ internal class BackgroundModelDownloads(
 
     private fun onCompleted(task: NSURLSessionTask, error: NSError?) {
         val name = task.taskDescription ?: return
-        if (tasks[name] == task) tasks.remove(name)
+        if (tasks[name]?.task == task) tasks.remove(name)
         val outcome: Throwable? = if (error != null) {
             val resume = error.userInfo[NSURLSessionDownloadTaskResumeData] as? NSData
             if (resume != null) saveResume(name, resume)
@@ -357,8 +485,9 @@ internal class BackgroundModelDownloads(
         }
     }
 
-    private fun onEventsFinished() {
-        val done = eventsDone.exchange(null) ?: return
+    private fun onEventsFinished(session: NSURLSession) {
+        val unmeteredOnly = wifiSession.isInitialized() && session == wifiSession.value
+        val done = eventsDone.remove(unmeteredOnly) ?: return
         dispatch_async(dispatch_get_main_queue()) { done() }
     }
 
@@ -417,6 +546,12 @@ internal class BackgroundModelDownloads(
         }
     }
 
+    /** Běžící úloha a sezení, ve kterém běží. */
+    private class Live(val task: NSURLSessionDownloadTask, val unmeteredOnly: Boolean)
+
+    /** Zastavení, na jehož resume data se čeká; [then] = co spustit po nich (přepnutí sítě). */
+    private class Pause(val done: CompletableDeferred<Unit>, var then: (() -> Unit)?)
+
     private class Waiter(
         val model: DownloadedModel,
         val onProgress: (ModelDownload) -> Unit,
@@ -451,7 +586,7 @@ internal class BackgroundModelDownloads(
         }
 
         override fun URLSessionDidFinishEventsForBackgroundURLSession(session: NSURLSession) {
-            owner.onEventsFinished()
+            owner.onEventsFinished(session)
         }
     }
 
@@ -462,6 +597,9 @@ internal class BackgroundModelDownloads(
 
         /** Jak dlouho se po spuštění čeká na události úloh z minulého běhu procesu. */
         const val RESTORE_TIMEOUT_NS = 3_000_000_000L
+
+        /** [Waiter.taskId] během přepnutí sítě: stará úloha už ne, nová ještě není. */
+        const val SWITCHING: ULong = 0u
         const val RESUME_BYTES_KEY = "NSURLSessionResumeBytesReceived"
 
         /** Kořen archivu resume data — doslova tohle jméno, ne hodnota `NSKeyedArchiveRootObjectKey` („root"). */

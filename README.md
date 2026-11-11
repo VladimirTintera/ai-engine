@@ -159,6 +159,7 @@ val liteRt = LiteRtOnDeviceAi(
     IosLiteRtPlatform(), // models in Application Support/ai-models, excluded from iCloud backup
     mapOf(ModelRuntime.LlamaCpp to LinkedLiteRtRuntime { LlamaCppEngineFactory() })::getValue,
     myConnectivity,
+    meteredNetwork = IosMeteredNetwork(), // cellular / hotspot, for "Wi-Fi only"
 )
 val ai: OnDeviceAi = RoutingOnDeviceAi(
     geminiNano = NoopOnDeviceAi,
@@ -184,7 +185,13 @@ func application(_ application: UIApplication,
 ```
 
 No capability or `Info.plist` entry is needed (background `URLSession` is not a background mode).
-The session identifier is `<bundle id>.ai-models` (`IosModelDownloads.sessionIdentifier`). Only
+The library uses two sessions: `<bundle id>.ai-models` (`IosModelDownloads.sessionIdentifier`) and
+`<bundle id>.ai-models.wifi` (`wifiSessionIdentifier`) for "Wi-Fi only" downloads
+(`download(variant, mobileData = false)`). In that session iOS does not use cellular data or a
+personal hotspot and the download waits for Wi-Fi on its own, even while the app is suspended.
+Changing the option during a download (`setDownloadNetwork`) moves it to the other session and
+continues from the downloaded part. `IosMeteredNetwork` reports the same "expensive" network
+(`NWPath.isExpensive`), so the screen can show that the download waits for Wi-Fi. Only
 `IosLiteRtPlatform` downloads in the background; a custom `LiteRtPlatform` on iOS downloads in the
 foreground through the shared code.
 
@@ -235,9 +242,10 @@ on iOS.
   terminated by the system, but **a user who force-quits the app from the app switcher cancels
   them**: iOS keeps the downloaded part (resume data) and the download resumes when the app calls
   `download` again after the next launch. Resuming needs a server with `Range` and an `ETag` or
-  `Last-Modified` (Hugging Face's CDN has both); without them a broken download starts over. The
-  "Wi-Fi only" option is not supported on iOS (as on desktop). Metal on the device, CPU in the
-  simulator.
+  `Last-Modified` (Hugging Face's CDN has both); without them a broken download starts over.
+  "Wi-Fi only" follows iOS's "expensive" network (cellular, personal hotspot), not Low Data Mode,
+  and does not apply when the app finishes a `.part` file left by a library version without
+  background downloads. Metal on the device, CPU in the simulator.
 - Downloaded models need arm64, Android 12+ and enough RAM (`minMemoryGb`); llama.cpp on
   desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS
   and iOS devices.

@@ -46,7 +46,9 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
   keeps going while the app is suspended or terminated by the system; the partial download is the
   system's resume data (`<file>.resume`) instead of `.part`, and the process only attaches to the
   running transfer for progress. This is the only platform-specific hook in the shared code
-  (`ModelFileDownloader`, `null` on Android and desktop).
+  (`ModelFileDownloader`, `null` on Android and desktop). "Wi-Fi only" is a second background
+  session with `allowsExpensiveNetworkAccess = false`; changing the option mid-download moves the
+  transfer there through resume data, and `IosMeteredNetwork` reports the "expensive" network.
 - Engines are loaded lazily, unloaded after an idle period (`idleUnloadMs`), and fall back from GPU
   to CPU when GPU loading fails.
 

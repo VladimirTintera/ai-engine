@@ -36,7 +36,11 @@ import platform.Foundation.NSUUID
 /**
  * Stahování souboru modelu přes `NSURLSession` download task ([BackgroundModelDownloads]) proti
  * lokálnímu serveru s rozsahy: celé stažení, chyba serveru, zastavení s resume daty a navázání,
- * smazání, připojení k běžící úloze, a totéž přes celý [LiteRtOnDeviceAi] s [IosLiteRtPlatform].
+ * smazání, připojení k běžící úloze, „jen přes Wi-Fi" a jeho změna za běhu, a totéž přes celý
+ * [LiteRtOnDeviceAi] s [IosLiteRtPlatform].
+ *
+ * Síť simulátoru placená není, takže sezení „jen přes Wi-Fi" stahuje; že na mobilních datech
+ * čeká, zařídí systém (`allowsExpensiveNetworkAccess`) a v simulátoru ověřit nejde.
  *
  * Sezení je obyčejné (`defaultSessionConfiguration`): na pozadí jde jen v aplikaci s id balíčku,
  * ne v testovací binárce. Delegát, resume data i přesun souboru jsou stejné; že stahování přežije
@@ -47,7 +51,10 @@ class BackgroundModelDownloadsTest {
     private val dir = "${NSTemporaryDirectory()}ai-models-${NSUUID().UUIDString}"
     private val content = ByteArray(3 * 1024 * 1024) { (it * 31 % 251).toByte() }
     private val server = TestHttpServer(content)
-    private val downloads = BackgroundModelDownloads({ NSURLSessionConfiguration.defaultSessionConfiguration }, { dir })
+    private val downloads = BackgroundModelDownloads(
+        { unmeteredOnly -> NSURLSessionConfiguration.defaultSessionConfiguration.apply { allowsExpensiveNetworkAccess = !unmeteredOnly } },
+        { dir },
+    )
     private val model = testModel(runtime = ModelRuntime.LlamaCpp).copy(
         url = server.url,
         sizeBytes = content.size.toLong(),
@@ -68,8 +75,8 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun stahneSoubor() = runBlocking {
-        withTimeout(20.seconds) { downloads.download(model) {} }
+    fun stahneSoubor() = runBlocking<Unit> {
+        withTimeout(20.seconds) { downloads.download(model, unmeteredOnly = false) {} }
 
         assertContentEquals(content, file.readBytes())
         assertNull(downloads.partialBytes(model))
@@ -78,23 +85,23 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun chybaServeruJeHttpStatus() = runBlocking {
+    fun chybaServeruJeHttpStatus() = runBlocking<Unit> {
         server.status.store(403)
 
-        val error = assertFailsWith<HttpStatusException> { withTimeout(20.seconds) { downloads.download(model) {} } }
+        val error = assertFailsWith<HttpStatusException> { withTimeout(20.seconds) { downloads.download(model, unmeteredOnly = false) {} } }
 
         assertEquals(403, error.code)
         assertFalse(file.exists())
     }
 
     @Test
-    fun zastaveniNechaResumeDataAPristeNavaze() = runBlocking {
+    fun zastaveniNechaResumeDataAPristeNavaze() = runBlocking<Unit> {
         stopHalfway()
         val partial = assertNotNull(downloads.partialBytes(model))
         assertTrue(partial in 1 until content.size, "staženo $partial B")
 
         server.chunkDelayUs.store(0)
-        withTimeout(20.seconds) { downloads.download(model) {} }
+        withTimeout(20.seconds) { downloads.download(model, unmeteredOnly = false) {} }
 
         assertContentEquals(content, file.readBytes())
         assertFalse(resume.exists())
@@ -106,7 +113,7 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun smazaniZahodiRozpracovane() = runBlocking {
+    fun smazaniZahodiRozpracovane() = runBlocking<Unit> {
         stopHalfway()
 
         downloads.discard(model)
@@ -117,10 +124,10 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun druheStahovaniSePripojiKBezicimu() = runBlocking {
+    fun druheStahovaniSePripojiKBezicimu() = runBlocking<Unit> {
         server.chunkDelayUs.store(2_000)
         withTimeout(30.seconds) {
-            List(2) { async(Dispatchers.IO) { downloads.download(model) {} } }.awaitAll()
+            List(2) { async(Dispatchers.IO) { downloads.download(model, unmeteredOnly = false) {} } }.awaitAll()
         }
 
         assertContentEquals(content, file.readBytes())
@@ -128,7 +135,7 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun celeStahovaniPresLiteRtOnDeviceAi() = runBlocking {
+    fun celeStahovaniPresLiteRtOnDeviceAi() = runBlocking<Unit> {
         val ai = liteRt()
 
         withTimeout(20.seconds) { ai.download(model.variant).collect {} }
@@ -140,7 +147,7 @@ class BackgroundModelDownloadsTest {
     }
 
     @Test
-    fun zastaveniPresLiteRtOnDeviceAiJePauza() = runBlocking {
+    fun zastaveniPresLiteRtOnDeviceAiJePauza() = runBlocking<Unit> {
         server.chunkDelayUs.store(5_000)
         val ai = liteRt()
         val job = CoroutineScope(Dispatchers.IO).launch {
@@ -161,21 +168,71 @@ class BackgroundModelDownloadsTest {
         assertTrue(server.ranges.load().last() != null, "navázání bez Range: ${server.ranges.load()}")
     }
 
+    @Test
+    fun jenPresWifiBeziVSezeniBezPlacenychSiti() = runBlocking<Unit> {
+        server.chunkDelayUs.store(2_000)
+        val job = CoroutineScope(Dispatchers.IO).launch { downloads.download(model, unmeteredOnly = true) {} }
+        withTimeout(20.seconds) { while (server.sent.load() < 100_000) delay(20) }
+
+        assertEquals(true, downloads.runningUnmeteredOnly(model))
+        server.chunkDelayUs.store(0)
+        withTimeout(20.seconds) { job.join() }
+        assertContentEquals(content, file.readBytes())
+    }
+
+    @Test
+    fun zmenaSiteZaBehuPrenesStahovaniDoDruhehoSezeni() = runBlocking<Unit> {
+        server.chunkDelayUs.store(5_000)
+        val result = CoroutineScope(Dispatchers.IO).async { runCatching { downloads.download(model, unmeteredOnly = false) {} } }
+        withTimeout(20.seconds) { while (server.sent.load() < 500_000) delay(20) }
+
+        downloads.setNetwork(model, unmeteredOnly = true)
+        withTimeout(10.seconds) { while (downloads.runningUnmeteredOnly(model) != true) delay(20) }
+        server.chunkDelayUs.store(0)
+
+        val outcome = withTimeout(20.seconds) { result.await() }
+        assertTrue(outcome.isSuccess, "stahování skončilo: ${outcome.exceptionOrNull()}")
+        assertContentEquals(content, file.readBytes())
+        val ranges = server.ranges.load()
+        assertEquals(2, ranges.size, "dotazy: $ranges")
+        assertNotNull(ranges[1], "přepnutí bez navázání: $ranges")
+    }
+
+    @Test
+    fun zakazDatZaBehuPresLiteRtOnDeviceAiStahovaniNezrusi() = runBlocking<Unit> {
+        server.chunkDelayUs.store(5_000)
+        val ai = liteRt(metered = true)
+        val result = CoroutineScope(Dispatchers.IO).async { runCatching { ai.download(model.variant, mobileData = true).collect {} } }
+        withTimeout(20.seconds) { while (server.sent.load() < 500_000) delay(20) }
+
+        ai.setDownloadNetwork(model.variant, mobileData = false)
+        withTimeout(10.seconds) { while (downloads.runningUnmeteredOnly(model) != true) delay(20) }
+        server.chunkDelayUs.store(0)
+
+        val outcome = withTimeout(20.seconds) { result.await() }
+        assertTrue(outcome.isSuccess, "stahování skončilo: ${outcome.exceptionOrNull()}")
+        assertEquals(OnDeviceAiStatus.Ready, ai.status(model.variant))
+        assertContentEquals(content, file.readBytes())
+    }
+
     /** Pustí zpomalené stahování, zastaví ho v půli a počká na resume data. */
     private suspend fun stopHalfway() {
         server.chunkDelayUs.store(5_000)
-        val job = CoroutineScope(Dispatchers.IO).launch { downloads.download(model) {} }
+        val job = CoroutineScope(Dispatchers.IO).launch { downloads.download(model, unmeteredOnly = false) {} }
         withTimeout(20.seconds) { while (server.sent.load() < 500_000) delay(20) }
         assertTrue(downloads.running(model))
         job.cancel()
         withTimeout(10.seconds) { while (!resume.exists()) delay(20) }
     }
 
-    private fun liteRt() = LiteRtOnDeviceAi(
+    private fun liteRt(metered: Boolean = false) = LiteRtOnDeviceAi(
         IosLiteRtPlatform(setOf(ModelRuntime.LlamaCpp), NoAudioClips, downloads) { dir },
         { LinkedLiteRtRuntime { error("Engine se v testu nenačítá") } },
         object : Connectivity {
             override val online: Flow<Boolean> = flowOf(true)
+        },
+        meteredNetwork = object : MeteredNetwork {
+            override fun isMetered() = metered
         },
     )
 
