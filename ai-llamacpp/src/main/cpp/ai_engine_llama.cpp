@@ -1,6 +1,11 @@
 // Jádro mostu k llama.cpp (C API v `ai_engine_llama.h`): načtení modelu, šablona promptu,
-// generování po tokenech. Jen stabilní C API z `llama.h` — knihovna `common` z příkladů se mění
-// s každým vydáním a táhne si vlastní závislosti.
+// generování po tokenech. Model počítá stabilní C API z `llama.h`; celou knihovnu `common`
+// z příkladů nebereme — mění se s každým vydáním a táhne si vlastní závislosti (stahování, HTTP).
+//
+// Z `common` jde jen engine Jinja (`common/jinja`, s `json` a `unicode`), kterým se prompt
+// skládá šablonou z GGUF. Vestavěné šablony `llama_chat_apply_template` neznají novější modely
+// (Gemma 4 by dostala ChatML a odpovídala s `<|im_end|>`) a neumí vypnout přemýšlení
+// (`enable_thinking` u Qwen3). Vestavěná šablona zůstává jako záloha, když Jinja selže.
 //
 // Volá ho JNI most (`ai_engine_llama_jni.cpp`, Android a desktop) i Kotlin/Native na iOS
 // (:ai-llamacpp-ios, cinterop). Liší se jen logování.
@@ -8,9 +13,17 @@
 #include "ai_engine_llama.h"
 
 #include <algorithm>
+#include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "jinja/caps.h"
+#include "jinja/lexer.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
+#include "jinja/value.h"
+#include "json.h"
 #include "llama.h"
 
 #define LOG_TAG "AiEngineLlama"
@@ -26,8 +39,23 @@
 #define LOGE(...) (std::fprintf(stderr, LOG_TAG " E: " __VA_ARGS__), std::fputc('\n', stderr))
 #endif
 
+namespace {
+
+/** Šablona chatu z GGUF (Jinja), přeložená jednou při načtení modelu. */
+struct ChatTemplate {
+    /** Zdroj, jak ho vrátil lexer; pro hlášky chyb za běhu šablony. */
+    std::string source;
+    jinja::program program;
+    /** Šablona bere obsah zprávy jen jako seznam částí (`[{type: text, text: …}]`), ne řetězec. */
+    bool typedContent = false;
+};
+
+}  // namespace
+
 struct ael_session {
     llama_model *model = nullptr;
+    /** `nullptr`, když model šablonu nemá nebo ji engine Jinja nepřečetl. */
+    std::unique_ptr<ChatTemplate> chatTemplate;
     llama_context *ctx = nullptr;
     llama_sampler *sampler = nullptr;
     int32_t generated = 0;
@@ -73,8 +101,74 @@ size_t completeUtf8Prefix(const std::string &text) {
     return i;
 }
 
-/** Prompt v šabloně modelu; neznámou šablonu nahradí ChatML, které používá většina modelů. */
-std::string applyTemplate(const llama_model *model, const std::string &prompt) {
+std::string tokenText(const llama_vocab *vocab, llama_token token) {
+    if (token == LLAMA_TOKEN_NULL) return {};
+    const char *text = llama_vocab_get_text(vocab, token);
+    return text != nullptr ? text : "";
+}
+
+/** Přeloží šablonu z GGUF; `nullptr`, když žádná není nebo jí engine Jinja nerozumí. */
+std::unique_ptr<ChatTemplate> parseTemplate(const char *source) {
+    if (source == nullptr || *source == '\0') return nullptr;
+    try {
+        auto tmpl = std::make_unique<ChatTemplate>();
+        jinja::lexer lexer;
+        const auto tokens = lexer.tokenize(source);
+        tmpl->program = jinja::parse_from_tokens(tokens);
+        tmpl->source = tokens.source;
+        const jinja::caps caps = jinja::caps_get(tmpl->program);
+        tmpl->typedContent = !caps.supports_string_content && caps.supports_typed_content;
+        return tmpl;
+    } catch (const std::exception &e) {
+        LOGW("Chat template could not be parsed (%s), using the built-in one", e.what());
+        return nullptr;
+    }
+}
+
+/**
+ * Prompt jako jedna zpráva uživatele ve šabloně modelu, s výzvou k odpovědi a vypnutým
+ * přemýšlením (`enable_thinking=false`, jak slibuje `LlmConversation`). `false`, když šablona
+ * za běhu selhala.
+ */
+bool renderTemplate(const ChatTemplate &tmpl, const llama_vocab *vocab, const std::string &prompt,
+                    std::string &out) {
+    try {
+        const common_json content = tmpl.typedContent
+            ? common_json::array({common_json{{"type", "text"}, {"text", prompt}}})
+            : common_json(prompt);
+        const common_json inputs{
+            {"messages", common_json::array({common_json{{"role", "user"}, {"content", content}}})},
+            {"add_generation_prompt", true},
+            {"enable_thinking", false},
+        };
+        jinja::context ctx(tmpl.source);
+        jinja::global_from_json(ctx, inputs, false);
+        ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tokenText(vocab, llama_vocab_bos(vocab))));
+        ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tokenText(vocab, llama_vocab_eos(vocab))));
+        jinja::runtime runtime(ctx);
+        out = jinja::runtime::gather_string_parts(runtime.execute(tmpl.program))->as_string().str();
+    } catch (const std::exception &e) {
+        LOGW("Chat template failed (%s), using the built-in one", e.what());
+        return false;
+    }
+    // Šablona obvykle začíná `bos_token` a `llama_tokenize` ho přidá znovu — model by dostal dva.
+    const std::string bos = tokenText(vocab, llama_vocab_bos(vocab));
+    if (!bos.empty() && llama_vocab_get_add_bos(vocab) && out.compare(0, bos.size(), bos) == 0) {
+        out.erase(0, bos.size());
+    }
+    return true;
+}
+
+/**
+ * Prompt v šabloně modelu: šablonou z GGUF přes Jinja, a když to nejde, vestavěnou šablonou
+ * llama.cpp; neznámou vestavěnou nahradí ChatML, které používá většina modelů.
+ */
+std::string applyTemplate(const ael_session *session, const std::string &prompt) {
+    const llama_model *model = session->model;
+    if (session->chatTemplate != nullptr) {
+        std::string rendered;
+        if (renderTemplate(*session->chatTemplate, llama_model_get_vocab(model), prompt, rendered)) return rendered;
+    }
     llama_chat_message message{"user", prompt.c_str()};
     const char *tmpl = llama_model_chat_template(model, nullptr);
     std::vector<char> buffer(prompt.size() * 2 + 512);
@@ -137,13 +231,14 @@ ael_session *ael_load(const char *path, int32_t nCtx, int32_t nThreads, bool gpu
     auto *session = new ael_session();
     session->model = model;
     session->ctx = ctx;
+    session->chatTemplate = parseTemplate(llama_model_chat_template(model, nullptr));
     return session;
 }
 
 int32_t ael_start(ael_session *session, const char *promptBytes, size_t length,
                   int32_t topK, float topP, float temperature, int32_t maxTokens) {
     const llama_vocab *vocab = llama_model_get_vocab(session->model);
-    const std::string prompt = applyTemplate(session->model, std::string(promptBytes, length));
+    const std::string prompt = applyTemplate(session, std::string(promptBytes, length));
 
     const int32_t needed = -llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), nullptr, 0, true, true);
     std::vector<llama_token> tokens(static_cast<size_t>(std::max(needed, 0)));

@@ -11,6 +11,7 @@ import eu.tintera.ai.engine.LlmSampling
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -56,17 +57,41 @@ class LlamaCppEngineFactory : LlmEngineFactory {
     private val android = System.getProperty("java.vm.name") == "Dalvik"
 }
 
+/**
+ * Načtený model. Volání do nativní strany jdou pod zámkem [lock], aby [close] — i z háku při
+ * ukončení JVM ([LlamaNative.closeAllAtExit]) — neuvolnil model uprostřed počítání tokenu.
+ */
 private class LlamaCppEngine(private val handle: Long) : LlmEngine {
 
-    @Volatile
+    private val lock = Any()
+
+    /** Pod [lock]. */
     private var closed = false
 
-    override fun conversation(sampling: LlmSampling): LlmConversation = LlamaCppConversation(handle, sampling)
+    init {
+        LlamaNative.opened(this)
+    }
+
+    override fun conversation(sampling: LlmSampling): LlmConversation = LlamaCppConversation(this, sampling)
+
+    /** Viz `ael_start`; zavřený engine = [IOException]. */
+    fun start(prompt: ByteArray, sampling: LlmSampling, maxTokens: Int): Int = synchronized(lock) {
+        if (closed) throw IOException("llama.cpp engine is closed")
+        LlamaNative.start(handle, prompt, sampling.topK, sampling.topP.toFloat(), sampling.temperature.toFloat(), maxTokens)
+    }
+
+    /** Další kus odpovědi, `null` na konci — i když engine mezitím někdo zavřel. */
+    fun next(): ByteArray? = synchronized(lock) {
+        if (closed) null else LlamaNative.next(handle)
+    }
 
     override fun close() {
-        if (closed) return
-        closed = true
-        LlamaNative.free(handle)
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            LlamaNative.free(handle)
+        }
+        LlamaNative.closed(this)
     }
 }
 
@@ -74,7 +99,7 @@ private class LlamaCppEngine(private val handle: Long) : LlmEngine {
  * Jedna konverzace = nová paměť kontextu (`start` ji smaže). Aplikace generuje jedno po druhém
  * (zámek enginu), takže dvě konverzace nad jedním kontextem se nepotkají.
  */
-private class LlamaCppConversation(private val handle: Long, private val sampling: LlmSampling) : LlmConversation {
+private class LlamaCppConversation(private val engine: LlamaCppEngine, private val sampling: LlmSampling) : LlmConversation {
 
     @Volatile
     private var cancelled = false
@@ -86,18 +111,11 @@ private class LlamaCppConversation(private val handle: Long, private val samplin
                 is LlmContent.Audio, is LlmContent.Image -> throw UnsupportedOperationException("llama.cpp runtime is text only")
             }
         }
-        val started = LlamaNative.start(
-            handle,
-            prompt.encodeToByteArray(),
-            sampling.topK,
-            sampling.topP.toFloat(),
-            sampling.temperature.toFloat(),
-            maxOutputTokens ?: Int.MAX_VALUE,
-        )
+        val started = engine.start(prompt.encodeToByteArray(), sampling, maxOutputTokens ?: Int.MAX_VALUE)
         if (started != 0) throw IOException("llama.cpp could not start the reply (code $started)")
         while (!cancelled) {
             currentCoroutineContext().ensureActive()
-            val piece = LlamaNative.next(handle) ?: break
+            val piece = engine.next() ?: break
             if (piece.isNotEmpty()) emit(piece.decodeToString())
         }
     }
@@ -117,6 +135,17 @@ internal object LlamaNative {
 
     @Volatile
     private var initialized = false
+
+    /** Načtené modely, které ještě nikdo nezavřel; uvolní je [closeAllAtExit]. */
+    private val open = ConcurrentHashMap.newKeySet<LlmEngine>()
+
+    fun opened(engine: LlmEngine) {
+        open += engine
+    }
+
+    fun closed(engine: LlmEngine) {
+        open -= engine
+    }
 
     fun ensureInitialized(cacheDir: File) {
         if (initialized) return
@@ -156,6 +185,20 @@ internal object LlamaNative {
         }
         root.listFiles()?.filter { it.name != digest }?.forEach { it.deleteRecursively() }
         System.load(file.absolutePath)
+        closeAllAtExit()
+    }
+
+    /**
+     * Desktop: modely nezavřené do konce procesu uvolní hák při ukončení JVM. Jinak by na Macu
+     * proces při ukončení spadl (SIGABRT): statický destruktor Metal backendu v ggml hlídá, že
+     * žádný buffer nezůstal (`GGML_ASSERT([rsets->data count] == 0)`), a ten běží až po hácích
+     * JVM — aplikace by musela před koncem sama zavřít `OnDeviceAi`. Na Androidu proces nikdo
+     * neukončuje `exit()`em a Metal tam není, proto jen tady.
+     */
+    private fun closeAllAtExit() {
+        Runtime.getRuntime().addShutdownHook(
+            Thread({ open.toList().forEach { runCatching { it.close() } } }, "llama.cpp shutdown"),
+        )
     }
 
     /** `darwin-aarch64`, `windows-x86_64`… jako složky v jaru (ai-llamacpp-desktop). */
