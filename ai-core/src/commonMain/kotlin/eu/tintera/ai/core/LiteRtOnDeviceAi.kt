@@ -286,6 +286,9 @@ class LiteRtOnDeviceAi(
         val model = variant.file()
         runtimeInstalls.remove(model)?.cancel()
         platform.cancelDownload(model)
+        // Stahování platformy (iOS: sezení na pozadí) uloží staženou část až za chvíli; počkat na
+        // ni, ať `status` hned hlásí Paused, ne Downloadable.
+        fileDownloader?.pause(model)
         // Úloha to ohlásí taky ([onWorkerStopped]), jenže až doběhne zrušení; obrazovka má
         // odpovědět hned. Úloha, která ještě nezačala, neohlásí nic.
         stateOf(model).value = DownloadState.Stopped

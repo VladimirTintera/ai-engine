@@ -32,6 +32,12 @@ internal interface ModelFileDownloader {
     /** Kolik bajtů [model] už má platforma stažených mimo `.part`; `null`, když nic. Levný dotaz. */
     fun partialBytes(model: DownloadedModel): Long?
 
+    /**
+     * Zastaví stahování [model] (i bez čekající korutiny) a vrátí se, až je stažená část uložená
+     * a [partialBytes] ji vidí — `stopDownload` pak hned hlásí `Paused`, ne `Downloadable`.
+     */
+    suspend fun pause(model: DownloadedModel)
+
     /** Zahodí rozpracované stahování [model] i s jeho staženou částí (smazání modelu). */
     suspend fun discard(model: DownloadedModel)
 }

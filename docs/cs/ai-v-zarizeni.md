@@ -652,8 +652,21 @@ je na Hugging Face za souhlasem, GGUF kopie ne.
   vlastní JNI (`plume_llama.cpp`) jen nad C API z `llama.h`. Příklad `examples/llama.android`
   staví backendy zvlášť (`GGML_BACKEND_DL`) a CPU variantu načítá z ADRESÁŘE knihoven — split
   APK z Play je má uvnitř APK, takže by nebylo odkud. Knihovna `common` z příkladů se mění
-  s každým vydáním, proto jen `llama.h` (šablona chatu `llama_chat_apply_template`, vzorkování
+  s každým vydáním a táhne stahování a HTTP, proto model počítá jen `llama.h` (vzorkování
   řetězem `llama_sampler_*`).
+- **Prompt skládá šablona z GGUF přes engine Jinja** — z `common` jen `common/jinja` s `json`
+  a `unicode`, přeložené přímo do knihovny (na iOS tak zůstanou v `libai_engine_llama.a`).
+  Knihovnu pro Android to zvětší asi o 1 MB (arm64 po ořezu 6,57 → 7,57 MB).
+  Zpráva jde jako jedna zpráva uživatele s `add_generation_prompt` a `enable_thinking=false`.
+  Vestavěné šablony `llama_chat_apply_template` neznají novější modely (Gemma 4 dostala ChatML
+  a odpovědi končily textem `<|im_end|>`) a přemýšlení neumí vypnout (Qwen3 psal `<think>`, ač
+  `LlmConversation` slibuje přemýšlení vypnuté). Vestavěná šablona zůstává jako záloha, když
+  Jinja šablonu nepřečte nebo za běhu selže. `bos_token`, kterým šablona obvykle začíná, se
+  odřízne, protože ho přidá `llama_tokenize`.
+- **Na desktopu uvolní nezavřené modely hák při ukončení JVM** (`LlamaNative.closeAllAtExit`).
+  Jinak proces na Macu při ukončení spadl (SIGABRT): statický destruktor Metal backendu hlídá,
+  že žádný buffer nezůstal (`GGML_ASSERT([rsets->data count] == 0)`). Volání do nativní strany
+  jdou pod zámkem enginu, aby hák neuvolnil model uprostřed tokenu.
 - **Bez OpenMP a KleidiAI.** OpenMP přidá sdílenou `libomp.so`, kterou by linker v součásti
   doinstalované za běhu hledat nemusel; KleidiAI si zdrojáky stahuje z GitHubu při konfiguraci.
   arm64 se staví pro `armv8.2-a+dotprod+fp16` (všechny telefony, na kterých se model nabízí);
@@ -706,7 +719,7 @@ společné; nová je jen položka `LiteRtModel.AyaExpanse8B` a poskytovatel v Na
   16 GB a kontext 4 096 jako EuroLLM 9B; na menších zařízeních se Aya nenabídne vůbec
   (`availability`). Volba velikosti se proto neukazuje (`SizeChoices` u jedné nic nekreslí).
 - **Architektura Command R** (`cohere` v llama.cpp) a šablona chatu s `<|START_OF_TURN_TOKEN|>`
-  — `llama_chat_apply_template` ji pozná ze šablony v souboru, nic vlastního není potřeba.
+  — jde šablonou ze souboru (Jinja), nic vlastního není potřeba.
 - **V automatice za EuroLLM, před Qwenem** (`AUTOMATIC_ORDER`), jen proto, že EuroLLM přibyl
   dřív; kdo zapne oba, rozdělí si úlohy v „Co čím počítat".
 - **Ověřeno na Macu (M5, Metal)** dočasným testem nad `LlamaCppEngineFactory`: soubor sedí
@@ -884,6 +897,9 @@ jako Apple (zvlášť pro každou aplikaci).
     a stahovalo se od nuly.
   - **Smazání** zahodí i resume data a běžící úlohu (`discard`); resume data, která dorazí pozdě, se
     po smazání neuloží. Zastavení počká, než resume data přijdou, a teprve pak může začít nová úloha.
+  - **`stopDownload` se vrátí, až jsou resume data uložená** (`ModelFileDownloader.pause`, nejvýš
+    10 s). `cancelByProducingResumeData` je vydá až za chvíli a `status` hned po zastavení hlásil
+    „Stáhnout" místo „Pozastaveno", dokud nedorazila.
   - **Aplikace musí ve Swiftu** předat `application(_:handleEventsForBackgroundURLSession:
     completionHandler:)` do `IosModelDownloads.shared.handleEventsForBackgroundURLSession` (README,
     „iOS"). Bez toho se soubor dokončený v neběžící aplikaci zpracuje až při dalším spuštění.

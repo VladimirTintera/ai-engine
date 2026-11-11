@@ -4,9 +4,11 @@ import co.touchlab.kermit.Logger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.IOException
 import kotlinx.io.files.Path
 import platform.Foundation.NSBundle
@@ -366,12 +368,20 @@ internal class BackgroundModelDownloads(
         }
     }
 
-    /** Zastaví stahování [model] i bez čekající korutiny (úloha z minulého spuštění). */
-    suspend fun pause(model: DownloadedModel) {
+    /**
+     * Zastaví stahování [model] i bez čekající korutiny (úloha z minulého spuštění) a počká, až
+     * systém vydá resume data a ta se uloží ([partialBytes]) — `cancelByProducingResumeData` je
+     * vydá až za chvíli a `status` by mezitím neviděl nic staženého. Nejvýš [PAUSE_TIMEOUT].
+     */
+    override suspend fun pause(model: DownloadedModel) {
         awaitRestored()
-        onQueue {
+        val pause = onQueue {
             pausing[model.fileName]?.then = null
             pauseOnQueue(model.fileName)
+            pausing[model.fileName]
+        } ?: return
+        if (withTimeoutOrNull(PAUSE_TIMEOUT) { pause.done.await() } == null) {
+            logger.w { "Resume data pro ${model.displayName} nepřišla do $PAUSE_TIMEOUT" }
         }
     }
 
@@ -597,6 +607,9 @@ internal class BackgroundModelDownloads(
 
         /** Jak dlouho se po spuštění čeká na události úloh z minulého běhu procesu. */
         const val RESTORE_TIMEOUT_NS = 3_000_000_000L
+
+        /** Jak dlouho [pause] čeká na resume data od systému. */
+        val PAUSE_TIMEOUT = 10.seconds
 
         /** [Waiter.taskId] během přepnutí sítě: stará úloha už ne, nová ještě není. */
         const val SWITCHING: ULong = 0u
