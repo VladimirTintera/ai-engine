@@ -892,8 +892,25 @@ jako Apple (zvlášť pro každou aplikaci).
     naváže po dalším spuštění, až aplikace zavolá `download`. Server bez `Range` a bez `ETag`/
     `Last-Modified` resume data nedá a přerušené stahování začne znovu. Samotné
     `UIApplication.beginBackgroundTask` (zvažované místo sezení na pozadí) dá jen desítky sekund,
-    na gigabajty nestačí. Volba „jen přes Wi-Fi" se na iOS přechází jako na desktopu (šla by přes
-    `allowsExpensiveNetworkAccess` požadavku, zatím ne).
+    na gigabajty nestačí.
+  - **„Jen přes Wi-Fi" je druhé sezení na pozadí** (`<id balíčku>.ai-models.wifi`,
+    `allowsExpensiveNetworkAccess = false`). Na požadavku podmínka být nemůže: úloha navázaná
+    z resume data si nese PŮVODNÍ požadavek a ten změnit nejde (platí přísnější z požadavku
+    a sezení, požadavky proto podmínku nemají vůbec). Na mobilních datech a hotspotu úloha čeká
+    v `nsurlsessiond` a na Wi-Fi se rozběhne sama, i v uspané aplikaci — na rozdíl od Androidu
+    (podmínka úlohy WorkManageru) tu nic neplánuje knihovna.
+  - **Změna volby za běhu** (`setDownloadNetwork` → `IosLiteRtPlatform.setDownloadNetwork` →
+    `BackgroundModelDownloads.setNetwork`) úlohu zastaví s resume daty a z nich založí novou ve
+    druhém sezení. Kdo na úlohu čeká, přejde na novou (`SWITCHING` místo id úlohy), takže zrušení
+    té staré (-999) korutinu nemine chybou a stahování neskončí. Totéž, když se obrazovka připojí
+    k běžící úloze s jinou volbou (`download` po spuštění). Společný kód kvůli zákazu dat přenos
+    platformy NERUŠÍ (`platformFetches`): na Androidu se úloha zruší a WorkManager ji pustí na
+    Wi-Fi, tady by po zrušení nebylo nic, co by stahování znovu spustilo.
+  - **Placenou síť hlásí `IosMeteredNetwork`** (`NWPathMonitor`, `isExpensive`; bez sítě `false`
+    jako na Androidu). Aplikace ho předá do `LiteRtOnDeviceAi`, a přenos podle téže cesty na
+    začátku ohlásí „čeká na Wi-Fi" (`runDownload` stav jinak nastaví „načisto" — na Androidu úloha
+    běží až na Wi-Fi, tady hned). Režim nízkých dat (`isConstrained`) se nepočítá.
+  - `.part` z verze bez stahování na pozadí se dotahuje v popředí a volbu „jen přes Wi-Fi" nehlídá.
 - **Paměť**: nad zhruba polovinu paměti zařízení aplikaci jetsam při načítání zabije, pokud nemá
   entitlement `com.apple.developer.kernel.increased-memory-limit`.
 - **Směrovač** má volitelné `apple`: na iOS `RoutingOnDeviceAi(NoopOnDeviceAi, liteRt, apple)`.
@@ -908,8 +925,14 @@ jako Apple (zvlášť pro každou aplikaci).
   Pozor: sezení na pozadí v simulátoru potřebuje aplikaci s id balíčku v entitlementech (sekce
   `__TEXT,__entitlements` jako u buildu z Xcode), jinak ji `nsurlsessiond` odmítne („does not have
   a bundle ID") a úloha skončí chybou -1. Totéž v testovací binárce, proto `BackgroundModelDownloadsTest`
-  (lokální server nad POSIX sokety) jede s obyčejným sezením: delegát, resume data, navázání,
-  smazání, připojení k úloze a celý `LiteRtOnDeviceAi`.
+  (lokální server nad POSIX sokety) jede s obyčejnými sezeními: delegát, resume data, navázání,
+  smazání, připojení k úloze, „jen přes Wi-Fi", přepnutí za běhu a celý `LiteRtOnDeviceAi` (i zákaz
+  dat na placené síti, který stahování nezruší).
+- **„Jen přes Wi-Fi" ověřené v simulátoru** stejnou aplikací: přepnutí za běhu založilo úlohu
+  v sezení `….ai-models.wifi` (log `nsurlsessiond`) z resume dat (`Range` + `If-Range`) a korutina
+  doběhla bez chyby; stahování „jen přes Wi-Fi" od začátku doběhlo v uspané aplikaci a probudily ji
+  události Wi-Fi sezení. **Že úloha na mobilních datech čeká, v simulátoru ověřit nejde** (jeho síť
+  „drahá" není) — to stojí na `allowsExpensiveNetworkAccess` systému.
 - **Ověřeno v simulátoru (iOS 26.5)**, ještě bez stahování na pozadí: stahování přes `NSURLSession`
   proti lokálnímu serveru (čisté, navázání `Range`, server bez rozsahů, 416 s celým `.part`, 403,
   zrušení za 2 ms);

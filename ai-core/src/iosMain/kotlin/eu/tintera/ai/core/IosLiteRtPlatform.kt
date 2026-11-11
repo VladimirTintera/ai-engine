@@ -27,7 +27,10 @@ import platform.Foundation.NSProcessInfo
  * - **Soubor stahuje systém** sezením `NSURLSession` na pozadí ([IosModelDownloads],
  *   [BackgroundModelDownloads]): stahování jde dál i v uspané nebo systémem ukončené aplikaci.
  *   Korutina procesu ([startDownload]) na něj jen čeká a hlásí průběh; po dalším spuštění se
- *   k běžící úloze připojí ([downloadPending]). Placenou síť platforma nerozlišuje.
+ *   k běžící úloze připojí ([downloadPending]).
+ * - **„Jen přes Wi-Fi" hlídá systém**: úloha běží v sezení bez placených sítí a na mobilních datech
+ *   nebo hotspotu čeká, i v uspané aplikaci. Změna volby za běhu úlohu přenese do druhého sezení
+ *   ([setDownloadNetwork]). Placenou síť pro obrazovku hlásí [IosMeteredNetwork].
  * - **GPU přes Metal** jen na zařízení; simulátor počítá na CPU ([gpu]).
  * - **Obrázky zatím ne** ([png]); zvuk dekodérem od aplikace ([audio]), ale llama.cpp ho stejně
  *   neumí — dává smysl až s LiteRT-LM.
@@ -71,7 +74,10 @@ class IosLiteRtPlatform internal constructor(
 
     override fun wavClips(path: String): List<ByteArray> = audio.wavClips(path)
 
-    /** [unmeteredOnly] se přejde jako na desktopu: aplikace volbu „jen přes Wi-Fi" na iOS zatím nemá nabízet. */
+    /**
+     * [unmeteredOnly] tu nic nemění: podmínku dostane přenos souboru od `LiteRtOnDeviceAi`
+     * ([BackgroundModelDownloads.download]) a hlídá ji systém.
+     */
     override fun startDownload(model: DownloadedModel, unmeteredOnly: Boolean, run: suspend () -> Unit) {
         while (true) {
             val running = downloads[model]
@@ -98,6 +104,11 @@ class IosLiteRtPlatform internal constructor(
      * Zastaví korutinu i úlohu sezení na pozadí — ta může běžet i bez korutiny (z minulého spuštění,
      * dokud se k ní obrazovka nepřipojila). Stažená část zůstane jako resume data.
      */
+    /** Úlohu, která běží nebo čeká na síť, přenese do sezení s novou podmínkou; korutina čeká dál. */
+    override fun setDownloadNetwork(model: DownloadedModel, unmeteredOnly: Boolean) {
+        scope.launch { fileDownloader.setNetwork(model, unmeteredOnly) }
+    }
+
     override fun cancelDownload(model: DownloadedModel) {
         downloads.remove(model)?.cancel()
         scope.launch { fileDownloader.pause(model) }

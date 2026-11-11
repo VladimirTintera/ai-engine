@@ -22,8 +22,12 @@ internal interface ModelFileDownloader {
      * Výpadek spojení = [IOException]: společný kód počká na síť a zavolá znovu, a stahování naváže.
      * Odpověď serveru, kterou opakování nespraví = [HttpStatusException]. Zrušení korutiny stahování
      * zastaví a stažená část zůstane ([partialBytes]).
+     *
+     * [unmeteredOnly]: stahovat jen na neplacené síti a na placené počkat. Podmínku hlídá přenos
+     * sám, i když se změní za běhu ([LiteRtPlatform.setDownloadNetwork]) — společný kód kvůli ní
+     * stahování neruší.
      */
-    suspend fun download(model: DownloadedModel, onProgress: (ModelDownload) -> Unit)
+    suspend fun download(model: DownloadedModel, unmeteredOnly: Boolean, onProgress: (ModelDownload) -> Unit)
 
     /** Kolik bajtů [model] už má platforma stažených mimo `.part`; `null`, když nic. Levný dotaz. */
     fun partialBytes(model: DownloadedModel): Long?

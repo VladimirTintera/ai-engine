@@ -17,8 +17,8 @@ interface MeteredNetwork {
 }
 
 /**
- * Platforma, která placenou síť nepozná (desktop: JVM druh sítě nehlásí) nebo modely nestahuje
- * (iOS), a testy. Volba „jen přes Wi-Fi" se pak nenabízí — slibovala by něco, co se nestane.
+ * Platforma, která placenou síť nepozná (desktop: JVM druh sítě nehlásí), a testy. Na Androidu
+ * `AndroidMeteredNetwork`, na iOS `IosMeteredNetwork`. Volba „jen přes Wi-Fi" se pak nenabízí — slibovala by něco, co se nestane.
  */
 object NoMeteredNetwork : MeteredNetwork {
     override fun isMetered(): Boolean = false

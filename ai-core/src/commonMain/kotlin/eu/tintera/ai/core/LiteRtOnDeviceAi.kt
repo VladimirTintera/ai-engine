@@ -139,6 +139,12 @@ class LiteRtOnDeviceAi(
     /** Stahování zrušené zákazem dat ([setDownloadNetwork]), ne zastavením úlohy. */
     private val wifiRequired = ConcurrentSet<DownloadedModel>()
 
+    /**
+     * Soubor právě přenáší platforma ([fileDownloader]) a podmínku sítě hlídá sama — zákaz dat
+     * za běhu ho proto neruší ([setDownloadNetwork]).
+     */
+    private val platformFetches = ConcurrentSet<DownloadedModel>()
+
     /** Runtime k už staženému modelu se doinstaloval sám ([restoreRuntime]); jednou za proces. */
     private val runtimeRestoreStarted = ConcurrentSet<ModelRuntime>()
 
@@ -292,6 +298,9 @@ class LiteRtOnDeviceAi(
      * rozběhne. Běžící úlohu nová podmínka nezastaví, takže když se data zakážou zrovna na
      * placené síti, zruší se tu stahování souboru a úloha skončí s opakováním
      * ([WifiRequiredException]): pustí ji znovu až Wi-Fi.
+     *
+     * Přenos platformy ([ModelFileDownloader], iOS) se neruší: novou podmínku dostane od platformy
+     * a na Wi-Fi počká sám (na iOS systém, i v uspané aplikaci).
      */
     override suspend fun setDownloadNetwork(variant: ModelVariant, mobileData: Boolean) {
         val model = variant.file()
@@ -305,7 +314,7 @@ class LiteRtOnDeviceAi(
                 current.progress.copy(waitingForNetwork = current.progress.waitingForNetwork || stopNow, wifiOnly = !mobileData),
             )
         }
-        if (stopNow) {
+        if (stopNow && model !in platformFetches) {
             fetches[model]?.let { fetch ->
                 wifiRequired += model
                 fetch.cancel()
@@ -722,7 +731,12 @@ class LiteRtOnDeviceAi(
             if (usableSpace(modelsDir) < remaining + FREE_SPACE_MARGIN) {
                 throw NotEnoughSpaceException(remaining + FREE_SPACE_MARGIN)
             }
-            fileDownloader.download(model, onProgress)
+            platformFetches += model
+            try {
+                fileDownloader.download(model, unmeteredOnly = wifiOnly(model), onProgress)
+            } finally {
+                platformFetches.remove(model)
+            }
             return@withContext
         }
         var offset = part.size()
