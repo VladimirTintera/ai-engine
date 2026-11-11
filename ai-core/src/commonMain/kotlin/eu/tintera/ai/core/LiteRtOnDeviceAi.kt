@@ -57,8 +57,10 @@ import kotlinx.io.files.SystemFileSystem
  *   sítě naváže samo, když se připojení vrátí ([fetch]).
  * - **Stahování drží naživu platforma** ([LiteRtPlatform.startDownload]): na Androidu úloha
  *   WorkManageru, která přežije i zabití procesu a naváže na `.part`, na desktopu a iOS korutina
- *   procesu (na iOS se po uspání aplikace naváže při dalším stahování). Tahle třída drží jen stav pro
- *   obrazovku ([downloads]) a stahuje v [runDownload].
+ *   procesu. Tahle třída drží jen stav pro obrazovku ([downloads]) a stahuje v [runDownload].
+ * - **Na iOS přenáší soubor systém** ([ModelFileDownloader], sezení `NSURLSession` na pozadí):
+ *   stahuje dál i v uspané nebo systémem ukončené aplikaci, rozpracovaný kus drží systém místo
+ *   `.part` a korutina se k běžícímu stahování po spuštění jen připojí.
  * - **Engine je v paměti nejvýš jeden**, i když je zapnutých víc modelů — přechod na jiný model
  *   ten první zavře. Po chvíli bez použití se uvolní ([idleUnloadMs]).
  *   Drží gigabajty RAM; nechat ho viset po jednom shrnutí by znamenalo, že systém dřív zabije
@@ -105,6 +107,15 @@ class LiteRtOnDeviceAi(
     private fun runtimeOf(model: DownloadedModel): LiteRtRuntime = runtimes(model.runtime)
     private fun DownloadedModel.file() = Path(modelsDir, fileName)
     private fun DownloadedModel.partFile() = Path(modelsDir, "$fileName.part")
+
+    /** Přenos souboru po svém (iOS: sezení na pozadí); `null` = společný přes [httpDownload] do `.part`. */
+    private val fileDownloader: ModelFileDownloader? = modelFileDownloader(platform)
+
+    /** Kolik je staženo: `.part` a k tomu, co drží platforma ([ModelFileDownloader.partialBytes]). */
+    private fun DownloadedModel.downloadedBytes(): Long = partFile().size() + (fileDownloader?.partialBytes(this) ?: 0L)
+
+    /** Je tu rozpracované stahování („Pokračovat ve stahování")? */
+    private fun DownloadedModel.partlyDownloaded(): Boolean = partFile().exists() || fileDownloader?.partialBytes(this) != null
 
     private val downloads = ConcurrentMap<DownloadedModel, MutableStateFlow<DownloadState>>()
 
@@ -156,7 +167,7 @@ class LiteRtOnDeviceAi(
             model.file().exists() && restoreRuntime(model) -> OnDeviceAiStatus.Downloading
             // Stažený model bez runtime, který se sám doinstalovat nepovedl (aplikace mimo
             // Play, chyba): „Pokračovat ve stahování" doinstaluje jen runtime.
-            model.partFile().exists() || model.file().exists() -> OnDeviceAiStatus.Paused
+            model.partlyDownloaded() || model.file().exists() -> OnDeviceAiStatus.Paused
             else -> OnDeviceAiStatus.Downloadable
         }
     }
@@ -211,7 +222,7 @@ class LiteRtOnDeviceAi(
             } == true
             state.value = DownloadState.Running(
                 ModelDownload(
-                    model.partFile().size(),
+                    model.downloadedBytes(),
                     model.sizeBytes,
                     waitingForNetwork = offline || (!mobileData && meteredNetwork.isMetered()),
                     wifiOnly = !mobileData,
@@ -255,7 +266,7 @@ class LiteRtOnDeviceAi(
         } else {
             state.value = DownloadState.Running(
                 ModelDownload(
-                    model.partFile().size(),
+                    model.downloadedBytes(),
                     model.sizeBytes,
                     waitingForNetwork = wifiOnly(model) && meteredNetwork.isMetered(),
                     wifiOnly = wifiOnly(model),
@@ -321,7 +332,7 @@ class LiteRtOnDeviceAi(
         }
         // Vždycky načisto: úloha se spouští jen s připojením, takže čekání na síť ze zastavené
         // úlohy už neplatí — a první hlášení průběhu přijde až po pár megabajtech.
-        state.value = DownloadState.Running(ModelDownload(model.partFile().size(), model.sizeBytes, wifiOnly = wifiOnly(model)))
+        state.value = DownloadState.Running(ModelDownload(model.downloadedBytes(), model.sizeBytes, wifiOnly = wifiOnly(model)))
         try {
             // Ve vlastní korutině, aby šla zrušit jen ona ([setDownloadNetwork]); zastavení
             // úlohy zruší celou [runDownload] a projde `join` jako dřív.
@@ -341,7 +352,7 @@ class LiteRtOnDeviceAi(
             throw e
         } catch (e: WifiRequiredException) {
             state.value = DownloadState.Running(
-                ModelDownload(model.partFile().size(), model.sizeBytes, waitingForNetwork = true, wifiOnly = true),
+                ModelDownload(model.downloadedBytes(), model.sizeBytes, waitingForNetwork = true, wifiOnly = true),
             )
             logger.i { "Stahování ${model.displayName} počká na Wi-Fi" }
             throw e
@@ -517,6 +528,7 @@ class LiteRtOnDeviceAi(
         val model = variant.file()
         runtimeInstalls.remove(model)?.cancel()
         platform.cancelDownload(model)
+        fileDownloader?.discard(model)
         downloads.remove(model)
         engineLock.withLock {
             if (loaded?.model == model) unloadLocked()
@@ -669,18 +681,18 @@ class LiteRtOnDeviceAi(
     private suspend fun fetch(model: DownloadedModel, state: MutableStateFlow<DownloadState>) {
         var failures = 0
         while (true) {
-            val before = model.partFile().size()
+            val before = model.downloadedBytes()
             try {
                 fetchFile(model) { progress -> state.value = DownloadState.Running(progress) }
                 break
             } catch (e: HttpStatusException) {
                 throw e
             } catch (e: IOException) {
-                failures = if (model.partFile().size() > before) 1 else failures + 1
+                failures = if (model.downloadedBytes() > before) 1 else failures + 1
                 if (failures > MAX_RETRIES_WITHOUT_PROGRESS) throw e
                 logger.i { "Stahování přerušené (${e.message}), čekám na síť (${model.displayName})" }
                 state.value = DownloadState.Running(
-                    ModelDownload(model.partFile().size(), model.sizeBytes, waitingForNetwork = true, wifiOnly = wifiOnly(model)),
+                    ModelDownload(model.downloadedBytes(), model.sizeBytes, waitingForNetwork = true, wifiOnly = wifiOnly(model)),
                 )
                 // Nejdřív síť, pak prodleva: po návratu sítě chvíli trvá, než opravdu vede
                 // ven, a výpadek, o kterém systém ještě neví, se tím nepřepálí na pokusy.
@@ -701,6 +713,18 @@ class LiteRtOnDeviceAi(
     private suspend fun fetchFile(model: DownloadedModel, onProgress: (ModelDownload) -> Unit) = withContext(Dispatchers.IO) {
         modelsDir.mkdirs()
         val part = model.partFile()
+        // Platforma s vlastním přenosem (iOS na pozadí) `.part` nenavazuje: rozpracovaný z doby
+        // před ní (nebo z jiné platformy) dotáhne společné stahování níž.
+        if (fileDownloader != null && !part.exists()) {
+            // Odpověď serveru při stahování na pozadí nikdo z nás nevidí včas, místo se proto
+            // kontroluje předem podle katalogu.
+            val remaining = model.sizeBytes - model.downloadedBytes()
+            if (usableSpace(modelsDir) < remaining + FREE_SPACE_MARGIN) {
+                throw NotEnoughSpaceException(remaining + FREE_SPACE_MARGIN)
+            }
+            fileDownloader.download(model, onProgress)
+            return@withContext
+        }
         var offset = part.size()
 
         val download = httpDownload(model.url, offset, TIMEOUT_MS)
@@ -722,7 +746,7 @@ class LiteRtOnDeviceAi(
                 return@withContext
             }
             if (code == HTTP_OK) offset = 0L
-            else if (code != HTTP_PARTIAL) throw HttpStatusException(code, model)
+            else if (code != HTTP_PARTIAL) throw HttpStatusException(code, model.displayName)
 
             val remaining = download.contentLength.takeIf { it > 0 } ?: (model.sizeBytes - offset)
             val total = offset + remaining
@@ -787,10 +811,6 @@ class LiteRtOnDeviceAi(
         /** Zastavil uživatel; stažená část zůstává. */
         data object Stopped : DownloadState
     }
-
-    /** Server odpověděl jinak než daty. Čekáním na síť se to nespraví, takže se neopakuje. */
-    private class HttpStatusException(code: Int, model: DownloadedModel) :
-        IOException("HTTP $code for ${model.displayName}")
 
     /** Vnitřní signál, že výstup dosáhl stropu; ven se nedostane. */
     private object OutputLimitReached : RuntimeException()

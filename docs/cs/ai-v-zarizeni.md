@@ -853,19 +853,70 @@ jako Apple (zvlášť pro každou aplikaci).
   ai-models`): gigabajty, které jde stáhnout znovu, do iCloudu nepatří a App Review to hlídá.
   Volné místo podle `NSURLVolumeAvailableCapacityForImportantUsageKey` (systém kvůli stahování
   uklidí i keše jiných aplikací).
-- **Stahování jen v popředí.** Korutina procesu jako na desktopu; po uspání aplikace spojení spadne,
-  `.part` zůstane a další stahování naváže. Stahování na pozadí (`backgroundSessionConfiguration`)
-  by chtělo soubor od systému místo `.part` a obnovu po spuštění — zatím ne. Volba „jen přes
-  Wi-Fi" se na iOS přechází jako na desktopu.
+- **Stahování na pozadí přes `NSURLSession`** (`backgroundSessionConfigurationWithIdentifier`,
+  download task; `BackgroundModelDownloads`, pro Swift `IosModelDownloads`). Soubor přenáší
+  systémový `nsurlsessiond`, takže stahování jde dál, i když aplikaci systém uspí nebo ukončí.
+  Gigabajtový model se dřív stahoval jen v popředí a po uspání aplikace stál.
+  - **Jediný háček ve společném kódu**: `ModelFileDownloader` nahrazuje jen přenos souboru
+    (`fetchFile`). Stav pro obrazovku, opakování po výpadku (`fetch`), kontrola místa (předem podle
+    katalogu — odpověď serveru při stahování na pozadí nikdo včas nevidí) i `runDownload` zůstaly
+    společné. Je to `internal expect fun modelFileDownloader`, na JVM a Androidu `null`: veřejné
+    API ani chování tam se nezměnilo. Vlastní `LiteRtPlatform` na iOS stahuje dál v popředí.
+  - **Rozpracovaný kus jsou resume data, ne `.part`.** Download task píše do souboru systému a při
+    přerušení (Zastavit, výpadek, zavření aplikace uživatelem) dá resume data; leží vedle modelu
+    jako `<soubor>.resume` a další úloha z nich naváže (systém pošle `Range` s `If-Range`). Stav
+    „Pokračovat ve stahování" a staženou velikost bere společný kód z `partialBytes`, tedy
+    z `NSURLSessionResumeBytesReceived`. Resume data jsou od iOS 12 slovník v `NSKeyedArchiver`,
+    kořen pod doslovným klíčem `"NSKeyedArchiveRootObjectKey"` — konstanta Foundation stejného jména
+    má hodnotu `"root"` a s ní se nic nenačte.
+  - **Hotový soubor přesouvá delegát hned** (`didFinishDownloadingToURL`): systém dočasný soubor po
+    návratu smaže a aplikace v tu chvíli nemusí mít korutinu, která by čekala (spustil ji systém jen
+    kvůli událostem sezení). Proto adresář modelů zná i `IosModelDownloads` sám (`iosModelsDir`).
+  - **`Range` se na pozadí neposílá.** Navázání řídí resume data a vlastní rozsah by se s nimi potkal
+    špatně (systém by navazoval od bajtů těla odpovědi, ne souboru). `.part` z verze bez stahování
+    na pozadí proto dotáhne dosavadní stahování v popředí (`SessionDownload`).
+  - **Po spuštění se korutina k úloze jen připojí.** Sezení se stejným identifikátorem vrátí úlohy
+    z minulého běhu (`getAllTasks`), poznají se podle `taskDescription` = jméno souboru;
+    `downloadPending` se ptá i na ně, takže obrazovka ukáže „Stahuje se" a `download` nezaloží
+    druhou úlohu. Úlohu, kterou zrušil uživatel zavřením aplikace, vrátí `getAllTasks` jako
+    dokončenou (stav 3, chyba -999) a resume data přijdou v `didCompleteWithError` až chvíli potom;
+    obnova na ně čeká (nejvýš 3 s), jinak se v simulátoru stav vyhodnotil jako „Stáhnout"
+    a stahovalo se od nuly.
+  - **Smazání** zahodí i resume data a běžící úlohu (`discard`); resume data, která dorazí pozdě, se
+    po smazání neuloží. Zastavení počká, než resume data přijdou, a teprve pak může začít nová úloha.
+  - **Aplikace musí ve Swiftu** předat `application(_:handleEventsForBackgroundURLSession:
+    completionHandler:)` do `IosModelDownloads.shared.handleEventsForBackgroundURLSession` (README,
+    „iOS"). Bez toho se soubor dokončený v neběžící aplikaci zpracuje až při dalším spuštění.
+    Žádný background mode ani položka v `Info.plist` potřeba není.
+  - **Omezení**: zavření aplikace uživatelem v přepínači stahování zruší (to je chování iOS) —
+    naváže po dalším spuštění, až aplikace zavolá `download`. Server bez `Range` a bez `ETag`/
+    `Last-Modified` resume data nedá a přerušené stahování začne znovu. Samotné
+    `UIApplication.beginBackgroundTask` (zvažované místo sezení na pozadí) dá jen desítky sekund,
+    na gigabajty nestačí. Volba „jen přes Wi-Fi" se na iOS přechází jako na desktopu (šla by přes
+    `allowsExpensiveNetworkAccess` požadavku, zatím ne).
 - **Paměť**: nad zhruba polovinu paměti zařízení aplikaci jetsam při načítání zabije, pokud nemá
   entitlement `com.apple.developer.kernel.increased-memory-limit`.
 - **Směrovač** má volitelné `apple`: na iOS `RoutingOnDeviceAi(NoopOnDeviceAi, liteRt, apple)`.
-- **Ověřeno v simulátoru (iOS 26.5)**: stahování přes `NSURLSession` proti lokálnímu serveru
-  (čisté, navázání `Range`, server bez rozsahů, 416 s celým `.part`, 403, zrušení za 2 ms);
+- **Stahování na pozadí ověřené v simulátoru (iPhone 17 Pro, iOS 26.5)** proti lokálnímu serveru
+  s `Range` a `ETag` (120 MB po 2 MB/s, testovací aplikace v Kotlin/Native mimo repozitář):
+  aplikace poslaná na pozadí byla uspaná (runningboard „Suspending task") a stahování přesto
+  doběhlo, systém ji probudil přes `handleEventsForBackgroundURLSession` a soubor se přesunul;
+  aplikace ukončená uprostřed (`simctl terminate`) byla po dokončení spuštěná na pozadí
+  (`UIApplicationLaunchOptionsURLSessionKey`) a model byl připravený; nové spuštění před koncem
+  ukázalo „Stahuje se" a připojilo se k běžící úloze (jediný GET); po zavření v přepínači byl stav
+  „Pozastaveno" a stahování navázalo přes `Range` s `If-Range`. SHA-1 souboru pokaždé sedělo.
+  Pozor: sezení na pozadí v simulátoru potřebuje aplikaci s id balíčku v entitlementech (sekce
+  `__TEXT,__entitlements` jako u buildu z Xcode), jinak ji `nsurlsessiond` odmítne („does not have
+  a bundle ID") a úloha skončí chybou -1. Totéž v testovací binárce, proto `BackgroundModelDownloadsTest`
+  (lokální server nad POSIX sokety) jede s obyčejným sezením: delegát, resume data, navázání,
+  smazání, připojení k úloze a celý `LiteRtOnDeviceAi`.
+- **Ověřeno v simulátoru (iOS 26.5)**, ještě bez stahování na pozadí: stahování přes `NSURLSession`
+  proti lokálnímu serveru (čisté, navázání `Range`, server bez rozsahů, 416 s celým `.part`, 403,
+  zrušení za 2 ms);
   `stories260K.gguf` načtený a odpovídající přes `LlamaCppEngineFactory` i přes celý
   `LiteRtOnDeviceAi` + `IosLiteRtPlatform` (stav, generování, smazání, vyřazení ze zálohy).
   Binárka pro zařízení se slinkuje i s Metalem. **Na iPhonu neověřené nic** (Metal, rychlost,
-  paměť, skutečný model).
+  paměť, skutečný model, stahování na pozadí na mobilních datech a při přechodu sítí).
 
 ## Přepis řeči (zvukový vstup Gemmy)
 

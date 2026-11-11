@@ -41,8 +41,12 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
 - The whole layer is common code (`commonMain` of `:ai-core`): files through kotlinx-io, HTTP behind
   `httpDownload` (`HttpURLConnection` on Android and desktop, `NSURLSession` on iOS). On iOS
   (`IosLiteRtPlatform`) models live in `Application Support/ai-models` excluded from iCloud backup,
-  downloads run in the process while the app is in the foreground and resume from `.part`, and only
-  llama.cpp is available (`LinkedLiteRtRuntime` with the factory from `:ai-llamacpp-ios`).
+  and only llama.cpp is available (`LinkedLiteRtRuntime` with the factory from `:ai-llamacpp-ios`).
+  The file itself is transferred by a background `URLSession` (`IosModelDownloads`), so a download
+  keeps going while the app is suspended or terminated by the system; the partial download is the
+  system's resume data (`<file>.resume`) instead of `.part`, and the process only attaches to the
+  running transfer for progress. This is the only platform-specific hook in the shared code
+  (`ModelFileDownloader`, `null` on Android and desktop).
 - Engines are loaded lazily, unloaded after an idle period (`idleUnloadMs`), and fall back from GPU
   to CPU when GPU loading fails.
 

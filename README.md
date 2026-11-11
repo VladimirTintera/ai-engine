@@ -167,6 +167,27 @@ val ai: OnDeviceAi = RoutingOnDeviceAi(
 )
 ```
 
+Downloads on iOS run in a background `URLSession`, so they continue while the app is suspended or
+after the system terminates it. Forward the session's events from the app delegate (in SwiftUI
+through `@UIApplicationDelegateAdaptor`), otherwise a download that finishes while the app is not
+running is only picked up at the next launch:
+
+```swift
+func application(_ application: UIApplication,
+                 handleEventsForBackgroundURLSession identifier: String,
+                 completionHandler: @escaping () -> Void) {
+    if !IosModelDownloads.shared.handleEventsForBackgroundURLSession(
+        identifier: identifier, completionHandler: completionHandler) {
+        completionHandler() // not the library's session
+    }
+}
+```
+
+No capability or `Info.plist` entry is needed (background `URLSession` is not a background mode).
+The session identifier is `<bundle id>.ai-models` (`IosModelDownloads.sessionIdentifier`). Only
+`IosLiteRtPlatform` downloads in the background; a custom `LiteRtPlatform` on iOS downloads in the
+foreground through the shared code.
+
 Models over roughly half of the device memory need the
 `com.apple.developer.kernel.increased-memory-limit` entitlement in the app, otherwise iOS kills the
 app while the model loads. Models of other runtimes (`ModelRuntime.LiteRt`) report `Unsupported`
@@ -209,10 +230,14 @@ on iOS.
   the downloaded models are unavailable.
 - **Apple Intelligence only through the Swift bridge** — Kotlin/Native cannot call the Swift-only
   `FoundationModels`. Text generation only (no structured output, audio or images on iOS yet).
-- **Downloaded models on iOS: llama.cpp only, text only, foreground downloads.** LiteRT-LM has
-  only an early-preview Swift API so far. A download stops when iOS suspends the app and resumes
-  from the `.part` file next time (no background `URLSession` yet); the "Wi-Fi only" option is not
-  supported on iOS (as on desktop). Metal on the device, CPU in the simulator.
+- **Downloaded models on iOS: llama.cpp only, text only.** LiteRT-LM has only an early-preview
+  Swift API so far. Downloads continue in a background `URLSession` while the app is suspended or
+  terminated by the system, but **a user who force-quits the app from the app switcher cancels
+  them**: iOS keeps the downloaded part (resume data) and the download resumes when the app calls
+  `download` again after the next launch. Resuming needs a server with `Range` and an `ETag` or
+  `Last-Modified` (Hugging Face's CDN has both); without them a broken download starts over. The
+  "Wi-Fi only" option is not supported on iOS (as on desktop). Metal on the device, CPU in the
+  simulator.
 - Downloaded models need arm64, Android 12+ and enough RAM (`minMemoryGb`); llama.cpp on
   desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS
   and iOS devices.

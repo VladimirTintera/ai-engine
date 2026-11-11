@@ -47,3 +47,6 @@ private class UrlConnectionDownload(url: String, offset: Long, timeoutMs: Int) :
         connection.disconnect()
     }
 }
+
+/** Android a desktop stahují soubor společně (`HttpURLConnection` do `.part`). */
+internal actual fun modelFileDownloader(platform: LiteRtPlatform): ModelFileDownloader? = null
