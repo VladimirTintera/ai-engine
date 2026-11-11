@@ -6,6 +6,7 @@ import eu.tintera.ai.engine.LlmEngineConfig
 import eu.tintera.ai.engine.LlmSampling
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.TimeSource
 import kotlinx.coroutines.flow.toList
@@ -46,6 +47,9 @@ class LlamaCppIosTest {
             val answer = pieces.joinToString("")
             println("CPU: načtení $loaded, odpověď ${started.elapsedNow() - loaded}, ${pieces.size} kusů: $answer")
             assertTrue(answer.isNotBlank())
+            // Šablona z GGUF: bez přemýšlení (Qwen3) a bez textu cizí šablony (Gemma 4 s ChatML).
+            assertFalse("<think>" in answer, "Přemýšlení mělo být vypnuté: $answer")
+            assertFalse("<|im_end|>" in answer, "Šablona chatu nesedí: $answer")
         }
     }
 

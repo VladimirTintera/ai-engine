@@ -82,13 +82,29 @@ endif()
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
+# Engine Jinja z `common` (šablona chatu z GGUF, viz ai_engine_llama.cpp) bez zbytku `common`:
+# jen jeho zdrojáky, `json` (nad hlavičkovým nlohmann z vendor/) a `unicode`. Překládají se přímo
+# do naší knihovny — na iOS tak zůstanou v `libai_engine_llama.a`, kterou :ai-llamacpp-ios balí.
+set(AEL_JINJA_SOURCES
+    ${LLAMA_SRC}/common/jinja/caps.cpp
+    ${LLAMA_SRC}/common/jinja/lexer.cpp
+    ${LLAMA_SRC}/common/jinja/parser.cpp
+    ${LLAMA_SRC}/common/jinja/runtime.cpp
+    ${LLAMA_SRC}/common/jinja/string.cpp
+    ${LLAMA_SRC}/common/jinja/value.cpp
+    ${LLAMA_SRC}/common/json.cpp
+    ${LLAMA_SRC}/common/unicode.cpp)
+
 if(IOS)
-    add_library(ai_engine_llama STATIC ai_engine_llama.cpp)
-    target_link_libraries(ai_engine_llama PRIVATE llama ggml)
+    add_library(ai_engine_llama STATIC ai_engine_llama.cpp ${AEL_JINJA_SOURCES})
+    target_include_directories(ai_engine_llama PRIVATE ${LLAMA_SRC}/common)
+    target_link_libraries(ai_engine_llama PRIVATE llama ggml vendor::nlohmann)
     return()
 endif()
 
-add_library(ai_engine_llama SHARED ai_engine_llama.cpp ai_engine_llama_jni.cpp)
+add_library(ai_engine_llama SHARED ai_engine_llama.cpp ai_engine_llama_jni.cpp ${AEL_JINJA_SOURCES})
+target_include_directories(ai_engine_llama PRIVATE ${LLAMA_SRC}/common)
+target_link_libraries(ai_engine_llama PRIVATE vendor::nlohmann)
 if(ANDROID)
     target_link_libraries(ai_engine_llama PRIVATE llama ggml android log)
 else()

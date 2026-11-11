@@ -157,10 +157,10 @@ class BackgroundModelDownloadsTest {
         assertEquals(OnDeviceAiStatus.Downloading, ai.status(model.variant))
 
         ai.stopDownload(model.variant)
-        job.join()
-        withTimeout(10.seconds) { while (!resume.exists()) delay(20) }
-
+        // Hned po návratu, bez čekání na resume data: `stopDownload` na ně počká sám.
         assertEquals(OnDeviceAiStatus.Paused, ai.status(model.variant))
+        assertTrue(resume.exists())
+        job.join()
         server.chunkDelayUs.store(0)
         withTimeout(20.seconds) { ai.download(model.variant).collect {} }
         assertEquals(OnDeviceAiStatus.Ready, ai.status(model.variant))
