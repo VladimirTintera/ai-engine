@@ -274,7 +274,7 @@ in this build or its CI and is never published.
 cd samples/playground
 ./gradlew :composeApp:run                       # desktop (Java 21 toolchain)
 ./gradlew :androidApp:installWithRuntimes       # Android: app + runtime feature modules (adb install-multiple)
-./gradlew :androidApp:packageDebugUniversalApk # Android: one APK with both runtimes, for sideloading to a phone
+./gradlew :androidApp:packageReleaseUniversalApk # Android: one APK (~80 MB) with both runtimes, for sideloading to a phone
 open iosApp/iosApp.xcodeproj                    # iOS: run the iosApp scheme
 ./gradlew :composeApp:jvmTest -Pplayground.e2e=true  # desktop UI end-to-end: downloads Qwen3 0.6B and chats
 ```

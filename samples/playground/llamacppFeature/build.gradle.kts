@@ -10,6 +10,9 @@ plugins {
 android {
     namespace = "eu.tintera.ai.playground.llamacpp"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    // NDK ořízne ladicí symboly nativních knihoven (llama.cpp 69 → 7,5 MB); bez něj je AGP balí
+    // neořezané („Unable to strip"). Ořez dělá modul, který knihovnu balí.
+    ndkVersion = libs.versions.ndk.get()
     defaultConfig {
         minSdk = libs.versions.android.minSdk.get().toInt()
     }
