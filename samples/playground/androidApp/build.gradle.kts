@@ -22,6 +22,9 @@ android {
         targetSdk = libs.versions.android.compileSdk.get().toInt()
         versionCode = 1
         versionName = "1.0"
+        // Stejné architektury jako runtime v součástech (LiteRT-LM a llama.cpp jen arm64 a x86_64);
+        // bundle (AAB i univerzální APK) jinak odmítne moduly s různou sadou ABI.
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
     }
 
     dynamicFeatures += setOf(":litertFeature", ":llamacppFeature")
