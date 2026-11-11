@@ -1,8 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-# Jedna knihovna `libai_engine_llama.so`: llama.cpp a ggml staticky, k tomu naše JNI (ai_engine_llama.cpp).
-# Na Androidu ji staví AGP (externalNativeBuild v :ai-llamacpp), na desktopu úloha
+# Jedna knihovna `libai_engine_llama.so`: llama.cpp a ggml staticky, k tomu naše jádro
+# (ai_engine_llama.cpp, C API v ai_engine_llama.h) a JNI most (ai_engine_llama_jni.cpp).
+# Na Androidu ji staví AGP (externalNativeBuild v :ai-llamacpp-android), na desktopu úloha
 # `buildLlamaCppDesktop` (:ai-llamacpp-desktop) pro systém, na kterém se staví.
+#
+# Na iOS (CMAKE_SYSTEM_NAME=iOS, úloha v :ai-llamacpp-ios) STATICKÁ knihovna bez JNI: Kotlin/Native
+# volá jádro přes cinterop a statické knihovny llama.cpp a ggml slinkuje do frameworku aplikace.
 #
 # Proč ne jako příklad `examples/llama.android`: ten staví backendy jako samostatné knihovny
 # (GGML_BACKEND_DL) a CPU variantu vybírá za běhu načtením z ADRESÁŘE nativních knihoven. Tahle
@@ -40,7 +44,18 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 # soubor `default.metallib` vedle knihovny, která leží vybalená v keši.
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 
-if(NOT ANDROID)
+if(IOS)
+    # iPhone a simulátor na Macu s Apple Silicon, jen arm64. Dot product mají všechny iPhony, na
+    # kterých se model nabízí (A14 a novější kvůli paměti, `IosLiteRtPlatform.canRun`), i každý M1.
+    # GPU přes Metal jen na zařízení: Metal v simulátoru nemá všechno, co ggml chce, a model by
+    # na něm spadl až při počítání. Shadery vložené jako na Macu.
+    set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+    if(NOT CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        set(GGML_METAL ON CACHE BOOL "" FORCE)
+        set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+        set(GGML_METAL_NDEBUG ON CACHE BOOL "" FORCE)
+    endif()
+elseif(NOT ANDROID)
     # Desktop: JNI hlavičky dodá úloha Gradle z toolchainu projektu (AI_ENGINE_JNI_INCLUDE_DIRS).
     # CPU varianta je stejná jako na Androidu: na arm64 dot product (všechny Apple Silicon),
     # na x86_64 výchozí sada ggml bez GGML_NATIVE, tedy AVX2, FMA, F16C a BMI2 (Haswell a novější).
@@ -67,7 +82,13 @@ endif()
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../llama.cpp)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
-add_library(ai_engine_llama SHARED ai_engine_llama.cpp)
+if(IOS)
+    add_library(ai_engine_llama STATIC ai_engine_llama.cpp)
+    target_link_libraries(ai_engine_llama PRIVATE llama ggml)
+    return()
+endif()
+
+add_library(ai_engine_llama SHARED ai_engine_llama.cpp ai_engine_llama_jni.cpp)
 if(ANDROID)
     target_link_libraries(ai_engine_llama PRIVATE llama ggml android log)
 else()

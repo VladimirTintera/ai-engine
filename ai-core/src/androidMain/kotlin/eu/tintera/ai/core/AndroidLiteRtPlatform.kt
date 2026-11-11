@@ -24,9 +24,9 @@ class AndroidLiteRtPlatform(
 
     private val downloads = ModelDownloadScheduler(context, worker)
 
-    override val modelsDir: File get() = File(context.filesDir, MODELS_DIR)
+    override val modelsDir: String get() = File(context.filesDir, MODELS_DIR).absolutePath
 
-    override val cacheDir: File get() = context.cacheDir
+    override val cacheDir: String get() = context.cacheDir.absolutePath
 
     override fun canRun(model: DownloadedModel): Boolean {
         if (Build.VERSION.SDK_INT < MIN_SDK) return false

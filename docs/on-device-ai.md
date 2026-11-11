@@ -26,7 +26,7 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
   stays fully supported. Response shapes are hand-written `GenerableProvider`s found through
   `ServiceLoader` (`META-INF/services` in the app); the classes Gson fills need keep rules in the app.
 
-## Downloaded models (LiteRT-LM and llama.cpp, Android and desktop)
+## Downloaded models (LiteRT-LM and llama.cpp; Android, desktop, iOS)
 
 - `DownloadedModel` describes a file: stable `id`, `url`, `fileName`, size, memory needed, context,
   runtime (`ModelRuntime.LiteRt` / `LlamaCpp`). `huggingFaceUrl(repo, commit, file)` pins the
@@ -38,6 +38,11 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
   keeps only its id) with a `dataSync` foreground service when the system allows it.
 - Models are offered only where they can run: arm64, Android 12+, enough RAM per entry; on desktop
   llama.cpp needs AVX2 (x86_64) or dot product (arm64).
+- The whole layer is common code (`commonMain` of `:ai-core`): files through kotlinx-io, HTTP behind
+  `httpDownload` (`HttpURLConnection` on Android and desktop, `NSURLSession` on iOS). On iOS
+  (`IosLiteRtPlatform`) models live in `Application Support/ai-models` excluded from iCloud backup,
+  downloads run in the process while the app is in the foreground and resume from `.part`, and only
+  llama.cpp is available (`LinkedLiteRtRuntime` with the factory from `:ai-llamacpp-ios`).
 - Engines are loaded lazily, unloaded after an idle period (`idleUnloadMs`), and fall back from GPU
   to CPU when GPU loading fails.
 
@@ -58,13 +63,16 @@ reasoning behind each decision, are in Czech in [cs/ai-v-zarizeni.md](cs/ai-v-za
 
 - Git submodule `ai-llamacpp/llama.cpp`, pinned to release `b12170`, shallow. Bump:
   `git -C ai-llamacpp/llama.cpp fetch --depth 1 origin tag bNNNNN`, check out, commit the pointer.
-- One shared library `ai_engine_llama` with llama.cpp and ggml linked statically and our JNI bridge
-  (only the stable C API from `llama.h`). No `GGML_BACKEND_DL` (split APKs keep libraries inside the
+- One shared library `ai_engine_llama` with llama.cpp and ggml linked statically, our bridge core
+  with a small C API (`ai_engine_llama.h`, only the stable C API from `llama.h` underneath) and a
+  thin JNI layer on top. iOS (`:ai-llamacpp-ios`) builds the same core as a static library without
+  JNI and calls it through cinterop. No `GGML_BACKEND_DL` (split APKs keep libraries inside the
   APK), no OpenMP (an extra `libomp.so` may not be found from a split installed at run time), no
   KleidiAI (it would download sources at configure time).
 - Text crosses JNI as UTF-8 bytes, not `jstring` (modified UTF-8 breaks emoji and CheckJNI).
 - CPU: `armv8.2-a+dotprod+fp16` on arm64; default ggml x86_64 set (AVX2/FMA/F16C/BMI2) on desktop.
-  GPU only via Metal on Apple Silicon, shaders embedded in the library.
+  GPU only via Metal on Apple Silicon and iOS devices (not the simulator), shaders embedded in the
+  library.
 
 ## Gson and ML Kit
 

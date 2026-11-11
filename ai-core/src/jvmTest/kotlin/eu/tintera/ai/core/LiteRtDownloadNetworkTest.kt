@@ -26,8 +26,8 @@ class LiteRtDownloadNetworkTest {
     private val changed: MutableList<Pair<DownloadedModel, Boolean>> = Collections.synchronizedList(mutableListOf())
 
     private val platform = object : LiteRtPlatform {
-        override val modelsDir = File(root, "ai-models").apply { mkdirs() }
-        override val cacheDir = File(root, "ai-cache")
+        override val modelsDir = File(root, "ai-models").apply { mkdirs() }.path
+        override val cacheDir = File(root, "ai-cache").path
         override fun canRun(model: DownloadedModel) = true
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()

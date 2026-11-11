@@ -1,19 +1,20 @@
 package eu.tintera.ai.core
 
-import java.io.File
-
 /**
  * Co runtime LiteRT-LM ([LiteRtOnDeviceAi]) potřebuje od platformy: kde leží modely, jestli je
  * zařízení unese, jak dostat zvuk a obraz do tvaru pro model a co drží stahování naživu. Engine,
- * stahování s navazováním a stav pro obrazovku jsou společné pro Android i desktop.
+ * stahování s navazováním a stav pro obrazovku jsou společné pro Android, desktop i iOS.
  */
 interface LiteRtPlatform {
 
-    /** Adresář stažených modelů. Soubory v něm jsou drahé, systém je mazat nemá. */
-    val modelsDir: File
+    /**
+     * Absolutní cesta k adresáři stažených modelů. Soubory v něm jsou drahé, systém je mazat nemá
+     * (na iOS ani zálohovat do iCloudu).
+     */
+    val modelsDir: String
 
-    /** Keš zkompilovaného modelu; tu smí systém klidně uklidit. */
-    val cacheDir: File
+    /** Absolutní cesta ke keši zkompilovaného modelu; tu smí systém klidně uklidit. */
+    val cacheDir: String
 
     /** Unese zařízení [model]? Paměť, systém, nativní knihovna runtime. Levný dotaz. */
     fun canRun(model: DownloadedModel): Boolean
@@ -32,7 +33,7 @@ interface LiteRtPlatform {
 
     /**
      * Spustí stahování [model], které přežije obrazovku, a vrátí se hned. [run] model stáhne
-     * (`LiteRtOnDeviceAi.runDownload`); platforma ho buď pustí sama (desktop), nebo spustí něco,
+     * (`LiteRtOnDeviceAi.runDownload`); platforma ho buď pustí sama (desktop, iOS), nebo spustí něco,
      * co ho zavolá (Android: úloha WorkManageru, která si runtime vezme od aplikace). Běžící stahování se
      * nespouští podruhé.
      *

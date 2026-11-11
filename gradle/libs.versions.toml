@@ -14,6 +14,9 @@ cmake = "3.31.0"
 
 kotlinx-coroutines = "1.11.0"
 kermit = "2.1.0"
+# Files of downloaded models in common code (Android, desktop, iOS); its `IOException` is
+# `java.io.IOException` on the JVM.
+kotlinx-io = "0.9.1"
 androidx-core = "1.19.0"
 # Background model download (`AiModelDownloadWorker`, subclassed by the app).
 work = "2.11.2"
@@ -45,6 +48,7 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "work" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }

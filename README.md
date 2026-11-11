@@ -5,7 +5,8 @@ On-device language models for Kotlin Multiplatform apps: one `OnDeviceAi` interf
 - **Gemini Nano** on Android through ML Kit GenAI (Prompt API, Android AICore),
 - **downloaded models** on Android and desktop (JVM): `.litertlm` files through
   [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), GGUF files through
-  [llama.cpp](https://github.com/ggml-org/llama.cpp),
+  [llama.cpp](https://github.com/ggml-org/llama.cpp); on iOS GGUF files through llama.cpp
+  (LiteRT-LM on iOS not yet),
 - **Apple Intelligence** (Foundation Models) on iOS 26+ through a small Swift bridge.
 
 The library downloads models (resumable, Wi-Fi/metered aware, in a WorkManager job on Android),
@@ -22,17 +23,18 @@ artifacts — use it as a git submodule.
 
 | Module | Platforms | What it is |
 | --- | --- | --- |
-| `:ai-engine` | Android, JVM | Interface of an in-process model runtime (`LlmEngineFactory`, `LlmEngine`, `LlmConversation`). No dependencies besides coroutines. |
-| `:ai-core` | Android, JVM, iOS | `OnDeviceAi` and its providers: `MlKitOnDeviceAi` (Gemini Nano), `LiteRtOnDeviceAi` (downloaded models), `AppleOnDeviceAi` (iOS), `RoutingOnDeviceAi`. Downloads, typed failures (`OnDeviceAiException`), Play Feature Delivery runtime loader. Depends only on `:ai-engine`, never on a runtime. |
+| `:ai-engine` | Android, JVM, iOS | Interface of an in-process model runtime (`LlmEngineFactory`, `LlmEngine`, `LlmConversation`). No dependencies besides coroutines. |
+| `:ai-core` | Android, JVM, iOS | `OnDeviceAi` and its providers: `MlKitOnDeviceAi` (Gemini Nano), `LiteRtOnDeviceAi` (downloaded models, all platforms), `AppleOnDeviceAi` (iOS), `RoutingOnDeviceAi`. Downloads, typed failures (`OnDeviceAiException`), Play Feature Delivery runtime loader. Depends only on `:ai-engine`, never on a runtime. |
 | `:ai-litert` | Android, JVM | `LlmEngineFactory` on top of LiteRT-LM (`.litertlm` files). The only module with `com.google.ai.edge.litertlm`. |
 | `:ai-llamacpp` | JVM (Android + desktop) | `LlmEngineFactory` on top of llama.cpp (GGUF files): Kotlin code, JNI bridge, `CMakeLists.txt` and the llama.cpp submodule. Builds nothing native itself. |
 | `:ai-llamacpp-android` | Android | Builds `libai_engine_llama.so` with the NDK (arm64-v8a, x86_64 for the emulator; 16 KB pages). |
 | `:ai-llamacpp-desktop` | JVM | Builds `ai_engine_llama` for the host OS/arch with CMake and puts it into the jar (Metal on Apple Silicon). Skipped locally without CMake or a compiler; an error on CI. |
+| `:ai-llamacpp-ios` | iOS | `LlmEngineFactory` on top of llama.cpp for Kotlin/Native: builds a static library (device with Metal, simulator CPU only) from the same `CMakeLists.txt` and calls the bridge's C API (`ai_engine_llama.h`) through cinterop. The library ends up in the app's framework on its own. |
 
 Packages are `eu.tintera.ai.engine`, `eu.tintera.ai.core`, `eu.tintera.ai.litert` and
-`eu.tintera.ai.llamacpp`.
+`eu.tintera.ai.llamacpp` (both llama.cpp modules).
 
-Runtimes are found **by class name at run time** (`LITERT_ENGINE_FACTORY`,
+On Android and desktop, runtimes are found **by class name at run time** (`LITERT_ENGINE_FACTORY`,
 `LLAMACPP_ENGINE_FACTORY` in `:ai-engine`), so the base of an Android app never has to see them at
 compile time — on Android they normally live in on-demand Play feature modules (see below). The R8
 keep rules for this are shipped as consumer rules of `:ai-core` and `:ai-litert`.
@@ -71,6 +73,8 @@ Requirements:
   (`sdk.dir=…`) or `ANDROID_HOME`. AGP needs the NDK version from the catalog (`ndk`) when it
   configures `:ai-llamacpp-android`, and CMake (`cmake`) for llama.cpp.
 - JDK toolchain 17 (resolved through foojay if missing).
+- For iOS: Xcode, and CMake for `:ai-llamacpp-ios` (`cmake;<version>` from the Android SDK, or
+  `brew install cmake ninja`).
 
 ### 2. Define your models
 
@@ -147,6 +151,27 @@ dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models 
 `IosOnDeviceModel.model` before creating `AppleOnDeviceAi`. A reference implementation is in
 [`ios/AppleTextModel.swift`](ios/AppleTextModel.swift).
 
+Downloaded GGUF models on iOS: add `eu.tintera.ai:ai-llamacpp-ios` to the framework's `iosMain`
+(it does not need to be exported) and pass the factory directly, there is no reflection on iOS:
+
+```kotlin
+val liteRt = LiteRtOnDeviceAi(
+    IosLiteRtPlatform(), // models in Application Support/ai-models, excluded from iCloud backup
+    mapOf(ModelRuntime.LlamaCpp to LinkedLiteRtRuntime { LlamaCppEngineFactory() })::getValue,
+    myConnectivity,
+)
+val ai: OnDeviceAi = RoutingOnDeviceAi(
+    geminiNano = NoopOnDeviceAi,
+    liteRt = liteRt,
+    apple = IosOnDeviceModel.model?.let(::AppleOnDeviceAi) ?: NoopOnDeviceAi,
+)
+```
+
+Models over roughly half of the device memory need the
+`com.apple.developer.kernel.increased-memory-limit` entitlement in the app, otherwise iOS kills the
+app while the model loads. Models of other runtimes (`ModelRuntime.LiteRt`) report `Unsupported`
+on iOS.
+
 ### 4. What the app provides
 
 - **The model catalog** (`DownloadedModel`), including showing a model's license where it requires
@@ -155,7 +180,8 @@ dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models 
   `describeImage(variant, imagePath, prompt)` take a finished prompt.
 - **Interfaces:** `Connectivity`, `AudioClipDecoder` (WAV 16 kHz mono, max 30 s; optional),
   `ModelDownloadNotifications` (channel, icon and texts of the download notification), a models
-  directory on desktop, `MeteredNetwork`, `DeviceLoad`.
+  directory on desktop, `MeteredNetwork`, `DeviceLoad`. A custom `LiteRtPlatform` gives
+  `modelsDir` and `cacheDir` as absolute path strings.
 - **User-facing texts.** Failures come as `OnDeviceAiException` with an `AiFailureReason` and the
   `variant` that failed; the app maps them to messages.
 - **The Play consent dialog.** Observe `SplitInstallConfirmations.pending` in the root activity,
@@ -181,10 +207,15 @@ dependency), implement `OnDeviceTextModel` in Swift on top of Foundation Models 
 - **Play Feature Delivery modules must be declared by the apps** — a library cannot declare
   dynamic features. Outside Google Play (sideloaded APK, other stores) on-demand install fails and
   the downloaded models are unavailable.
-- **iOS only through the Swift bridge** — Kotlin/Native cannot call the Swift-only
+- **Apple Intelligence only through the Swift bridge** — Kotlin/Native cannot call the Swift-only
   `FoundationModels`. Text generation only (no structured output, audio or images on iOS yet).
+- **Downloaded models on iOS: llama.cpp only, text only, foreground downloads.** LiteRT-LM has
+  only an early-preview Swift API so far. A download stops when iOS suspends the app and resumes
+  from the `.part` file next time (no background `URLSession` yet); the "Wi-Fi only" option is not
+  supported on iOS (as on desktop). Metal on the device, CPU in the simulator.
 - Downloaded models need arm64, Android 12+ and enough RAM (`minMemoryGb`); llama.cpp on
-  desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS.
+  desktop needs AVX2 (x86_64) or dot product (arm64). GPU for llama.cpp only via Metal on macOS
+  and iOS devices.
 - Model weights are never bundled, and the library names no models. Each model has its own license,
   which is the concern of the app that offers it; see [NOTICE](NOTICE).
 
@@ -197,8 +228,8 @@ git clone --recurse-submodules --shallow-submodules https://github.com/VladimirT
 
 `build` compiles all targets, runs the JVM, Android host and (on macOS) iOS simulator tests, builds
 the Android libraries including llama.cpp from the NDK and the desktop llama.cpp library for the
-host. iOS klibs need macOS with Xcode. `-PllamaCppTestModel=<file.gguf>` lets
-`LlamaCppDesktopTest` actually run a model.
+host. iOS klibs need macOS with Xcode (and CMake for llama.cpp). `-PllamaCppTestModel=<file.gguf>`
+lets `LlamaCppDesktopTest` and the simulator test `LlamaCppIosTest` actually run a model.
 
 Engineering notes (in Czech) are in [docs/cs/ai-v-zarizeni.md](docs/cs/ai-v-zarizeni.md), an
 English overview in [docs/on-device-ai.md](docs/on-device-ai.md).

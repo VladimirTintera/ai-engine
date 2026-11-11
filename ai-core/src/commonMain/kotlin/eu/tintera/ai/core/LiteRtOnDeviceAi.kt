@@ -6,14 +6,10 @@ import eu.tintera.ai.engine.LlmContent
 import eu.tintera.ai.engine.LlmEngine
 import eu.tintera.ai.engine.LlmEngineConfig
 import eu.tintera.ai.engine.LlmSampling
-import java.io.File
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -35,6 +31,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.io.IOException
+import kotlinx.io.buffered
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 
 /**
  * Modely, které si stáhne a spravuje aplikace sama, přes LiteRT-LM, nebo llama.cpp. Který soubor,
@@ -44,19 +44,20 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Na rozdíl od Gemini Nano (`MlKitOnDeviceAi`) tu není systémová služba — soubor modelu (stovky MB
  * až gigabajty) leží v adresáři od platformy ([LiteRtPlatform.modelsDir]) a počítá ho engine uvnitř
- * našeho procesu. **Kód je společný pro Android a desktop** (source set `liteRtMain`); co se
- * liší, je za [LiteRtPlatform].
+ * našeho procesu. **Kód je společný pro Android, desktop i iOS** (`commonMain`); co se liší,
+ * je za [LiteRtPlatform], síť za `httpDownload` (`HttpURLConnection`, na iOS `NSURLSession`).
  *
  * - **Samotnou knihovnu LiteRT-LM tu nevidíme**, jen rozhraní enginu (:ai-engine). Runtime
  *   dává [LiteRtRuntime]: na desktopu přibalený, na Androidu součást z Google Play, která se
- *   doinstaluje SPOLU s modelem ([download]). Model je připravený, až když je tu obojí.
+ *   doinstaluje SPOLU s modelem ([download]), na iOS slinkovaný v aplikaci. Model je připravený,
+ *   až když je tu obojí.
  * - **Stahuje se do `.part` a přejmenovává až hotový.** Přítomnost výsledného souboru tedy
  *   znamená „kompletní model" a nic dalšího se kontrolovat nemusí. Přerušené stahování
  *   navazuje (`Range`) — u gigabajtů by začínat od nuly bylo nepoužitelné — a po výpadku
  *   sítě naváže samo, když se připojení vrátí ([fetch]).
  * - **Stahování drží naživu platforma** ([LiteRtPlatform.startDownload]): na Androidu úloha
- *   WorkManageru, která přežije i zabití procesu a naváže na `.part`, na desktopu korutina
- *   procesu (aplikace běží, dokud ji uživatel neukončí). Tahle třída drží jen stav pro
+ *   WorkManageru, která přežije i zabití procesu a naváže na `.part`, na desktopu a iOS korutina
+ *   procesu (na iOS se po uspání aplikace naváže při dalším stahování). Tahle třída drží jen stav pro
  *   obrazovku ([downloads]) a stahuje v [runDownload].
  * - **Engine je v paměti nejvýš jeden**, i když je zapnutých víc modelů — přechod na jiný model
  *   ten první zavře. Po chvíli bez použití se uvolní ([idleUnloadMs]).
@@ -100,35 +101,35 @@ class LiteRtOnDeviceAi(
     /** Stahování a úklid enginu přežívají obrazovky; model je jeden na proces. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val modelsDir: File get() = platform.modelsDir
+    private val modelsDir: Path get() = Path(platform.modelsDir)
     private fun runtimeOf(model: DownloadedModel): LiteRtRuntime = runtimes(model.runtime)
-    private fun DownloadedModel.file() = File(modelsDir, fileName)
-    private fun DownloadedModel.partFile() = File(modelsDir, "$fileName.part")
+    private fun DownloadedModel.file() = Path(modelsDir, fileName)
+    private fun DownloadedModel.partFile() = Path(modelsDir, "$fileName.part")
 
-    private val downloads = ConcurrentHashMap<DownloadedModel, MutableStateFlow<DownloadState>>()
+    private val downloads = ConcurrentMap<DownloadedModel, MutableStateFlow<DownloadState>>()
 
     private fun stateOf(model: DownloadedModel) = downloads.getOrPut(model) { MutableStateFlow(DownloadState.Idle) }
 
     /** Doinstalování runtime před stahováním modelu ([download]); [stopDownload] ho zastaví. */
-    private val runtimeInstalls = ConcurrentHashMap<DownloadedModel, Job>()
+    private val runtimeInstalls = ConcurrentMap<DownloadedModel, Job>()
 
     /**
      * Smí stahování modelu přes mobilní data ([download], [setDownloadNetwork])? Jen v paměti:
      * úloha přežije proces i s podmínkou sítě, tohle je jen pro stav na obrazovce — po restartu
      * ho obnoví první připojení obrazovky (`download` s volbou z Nastavení).
      */
-    private val mobileData = ConcurrentHashMap<DownloadedModel, Boolean>()
+    private val mobileData = ConcurrentMap<DownloadedModel, Boolean>()
 
     private fun wifiOnly(model: DownloadedModel) = mobileData[model] == false
 
     /** Běžící stahování souboru v [runDownload]; zákaz dat za běhu ho zruší. */
-    private val fetches = ConcurrentHashMap<DownloadedModel, Job>()
+    private val fetches = ConcurrentMap<DownloadedModel, Job>()
 
     /** Stahování zrušené zákazem dat ([setDownloadNetwork]), ne zastavením úlohy. */
-    private val wifiRequired: MutableSet<DownloadedModel> = ConcurrentHashMap.newKeySet()
+    private val wifiRequired = ConcurrentSet<DownloadedModel>()
 
     /** Runtime k už staženému modelu se doinstaloval sám ([restoreRuntime]); jednou za proces. */
-    private val runtimeRestoreStarted: MutableSet<ModelRuntime> = ConcurrentHashMap.newKeySet()
+    private val runtimeRestoreStarted = ConcurrentSet<ModelRuntime>()
 
     private val engineLock = Mutex()
     private var loaded: LoadedEngine? = null
@@ -141,7 +142,7 @@ class LiteRtOnDeviceAi(
      * zkusí znovu. **Pro každý runtime zvlášť**: Metal v llama.cpp a GPU v LiteRT-LM jsou různé
      * backendy, selhání jednoho nic neříká o druhém.
      */
-    private val gpuFailed: MutableSet<ModelRuntime> = ConcurrentHashMap.newKeySet()
+    private val gpuFailed = ConcurrentSet<ModelRuntime>()
 
     override suspend fun status(variant: ModelVariant): OnDeviceAiStatus {
         val model = variant.model ?: return OnDeviceAiStatus.Unsupported
@@ -210,7 +211,7 @@ class LiteRtOnDeviceAi(
             } == true
             state.value = DownloadState.Running(
                 ModelDownload(
-                    model.partFile().length(),
+                    model.partFile().size(),
                     model.sizeBytes,
                     waitingForNetwork = offline || (!mobileData && meteredNetwork.isMetered()),
                     wifiOnly = !mobileData,
@@ -254,7 +255,7 @@ class LiteRtOnDeviceAi(
         } else {
             state.value = DownloadState.Running(
                 ModelDownload(
-                    model.partFile().length(),
+                    model.partFile().size(),
                     model.sizeBytes,
                     waitingForNetwork = wifiOnly(model) && meteredNetwork.isMetered(),
                     wifiOnly = wifiOnly(model),
@@ -320,7 +321,7 @@ class LiteRtOnDeviceAi(
         }
         // Vždycky načisto: úloha se spouští jen s připojením, takže čekání na síť ze zastavené
         // úlohy už neplatí — a první hlášení průběhu přijde až po pár megabajtech.
-        state.value = DownloadState.Running(ModelDownload(model.partFile().length(), model.sizeBytes, wifiOnly = wifiOnly(model)))
+        state.value = DownloadState.Running(ModelDownload(model.partFile().size(), model.sizeBytes, wifiOnly = wifiOnly(model)))
         try {
             // Ve vlastní korutině, aby šla zrušit jen ona ([setDownloadNetwork]); zastavení
             // úlohy zruší celou [runDownload] a projde `join` jako dřív.
@@ -340,7 +341,7 @@ class LiteRtOnDeviceAi(
             throw e
         } catch (e: WifiRequiredException) {
             state.value = DownloadState.Running(
-                ModelDownload(model.partFile().length(), model.sizeBytes, waitingForNetwork = true, wifiOnly = true),
+                ModelDownload(model.partFile().size(), model.sizeBytes, waitingForNetwork = true, wifiOnly = true),
             )
             logger.i { "Stahování ${model.displayName} počká na Wi-Fi" }
             throw e
@@ -525,8 +526,8 @@ class LiteRtOnDeviceAi(
             model.partFile().delete()
             // Zkompilovaná keš modelu: skoro tak velká jako model a s ním k ničemu. Leží v keši
             // platformy, kterou engine dostává, a ze sond bez `cacheDir` i vedle modelu.
-            listOf(platform.cacheDir, modelsDir).forEach { dir ->
-                dir.listFiles { file -> model.ownsCacheFile(file.name) }?.forEach { it.delete() }
+            listOf(Path(platform.cacheDir), modelsDir).forEach { dir ->
+                dir.listNames().filter { model.ownsCacheFile(it) }.forEach { Path(dir, it).delete() }
             }
         }
         logger.i { "Model smazán (${model.displayName})" }
@@ -620,7 +621,7 @@ class LiteRtOnDeviceAi(
                     model, audio, vision, backend,
                     engines.open(
                         LlmEngineConfig(
-                            modelPath = model.file().absolutePath,
+                            modelPath = model.file().toString(),
                             // Obraz počítá týž backend jako text (Gallery: GPU, když jde) — na CPU se
                             // spadne spolu s ním.
                             backend = backend,
@@ -629,7 +630,7 @@ class LiteRtOnDeviceAi(
                             maxNumTokens = model.maxTokens(),
                             // Keš zkompilovaného modelu zrychlí druhé načtení; do keše platformy, ať ji
                             // systém smí uklidit — soubor modelu vedle ní je drahý, keš ne.
-                            cacheDir = platform.cacheDir.apply { mkdirs() }.absolutePath,
+                            cacheDir = Path(platform.cacheDir).also { it.mkdirs() }.toString(),
                         ),
                     ),
                 )
@@ -643,8 +644,10 @@ class LiteRtOnDeviceAi(
                     null
                 }
                 gpu ?: start(LlmBackend.Cpu).also { gpuFailed += model.runtime }
-            } catch (e: LinkageError) {
-                // Error, ne výjimka: `catch (Exception)` volajících by ho nechytil a aplikace by spadla.
+            } catch (e: Error) {
+                // `LinkageError` je Error, ne výjimka: `catch (Exception)` volajících by ho nechytil
+                // a aplikace by spadla.
+                if (!isLinkageError(e)) throw e
                 throw IOException("${model.runtime} runtime failed to load", e)
             }
         }
@@ -666,18 +669,18 @@ class LiteRtOnDeviceAi(
     private suspend fun fetch(model: DownloadedModel, state: MutableStateFlow<DownloadState>) {
         var failures = 0
         while (true) {
-            val before = model.partFile().length()
+            val before = model.partFile().size()
             try {
                 fetchFile(model) { progress -> state.value = DownloadState.Running(progress) }
                 break
             } catch (e: HttpStatusException) {
                 throw e
             } catch (e: IOException) {
-                failures = if (model.partFile().length() > before) 1 else failures + 1
+                failures = if (model.partFile().size() > before) 1 else failures + 1
                 if (failures > MAX_RETRIES_WITHOUT_PROGRESS) throw e
                 logger.i { "Stahování přerušené (${e.message}), čekám na síť (${model.displayName})" }
                 state.value = DownloadState.Running(
-                    ModelDownload(model.partFile().length(), model.sizeBytes, waitingForNetwork = true, wifiOnly = wifiOnly(model)),
+                    ModelDownload(model.partFile().size(), model.sizeBytes, waitingForNetwork = true, wifiOnly = wifiOnly(model)),
                 )
                 // Nejdřív síť, pak prodleva: po návratu sítě chvíli trvá, než opravdu vede
                 // ven, a výpadek, o kterém systém ještě neví, se tím nepřepálí na pokusy.
@@ -690,65 +693,58 @@ class LiteRtOnDeviceAi(
     /**
      * Stáhne soubor do `.part` s navázáním na to, co už je staženo, a hotový přejmenuje.
      *
-     * Hugging Face přesměrovává na CDN; `HttpURLConnection` přesměrování v rámci HTTPS následuje
-     * sám a hlavičku `Range` přenese. Server, který rozsah nevezme (200 místo 206), dostane
+     * Hugging Face přesměrovává na CDN; HTTP klient platformy ([httpDownload]) přesměrování
+     * následuje sám a hlavičku `Range` přenese. Server, který rozsah nevezme (200 místo 206), dostane
      * soubor od začátku. **401/403 znamená model za souhlasem s licencí** — to knihovna neumí
      * (chtělo by to přihlášení k Hugging Face) a hlásí se jako obyčejné selhání.
      */
     private suspend fun fetchFile(model: DownloadedModel, onProgress: (ModelDownload) -> Unit) = withContext(Dispatchers.IO) {
         modelsDir.mkdirs()
         val part = model.partFile()
-        var offset = if (part.exists()) part.length() else 0L
+        var offset = part.size()
 
-        val connection = (URL(model.url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            if (offset > 0) setRequestProperty("Range", "bytes=$offset-")
-        }
+        val download = httpDownload(model.url, offset, TIMEOUT_MS)
         /*
          * Zrušení (Zastavit, zákaz dat za běhu) zavře spojení. Blokující `read` zrušení korutiny
          * nepozná a na síti, která přestala posílat data, by čekal až do [TIMEOUT_MS]: zákaz dat
          * na emulátoru se tak projevil až po 23 s.
          */
         val closeOnCancel = coroutineContext.job.invokeOnCompletion { cause ->
-            if (cause is CancellationException) connection.disconnect()
+            if (cause is CancellationException) download.close()
         }
         try {
-            val code = connection.responseCode
-            if (code == HTTP_RANGE_NOT_SATISFIABLE && part.length() == model.sizeBytes) {
+            val code = download.connect()
+            if (code == HTTP_RANGE_NOT_SATISFIABLE && part.size() == model.sizeBytes) {
                 // `.part` je celý, jen se nestihl přejmenovat (proces zabitý mezi posledním
                 // zápisem a přejmenováním). Bez tohohle by každý další pokus skončil 416.
                 moveFinished(model)
                 onProgress(ModelDownload(model.sizeBytes, model.sizeBytes))
                 return@withContext
             }
-            if (code == HttpURLConnection.HTTP_OK) offset = 0L
-            else if (code != HttpURLConnection.HTTP_PARTIAL) throw HttpStatusException(code, model)
+            if (code == HTTP_OK) offset = 0L
+            else if (code != HTTP_PARTIAL) throw HttpStatusException(code, model)
 
-            val remaining = connection.contentLengthLong.takeIf { it > 0 } ?: (model.sizeBytes - offset)
+            val remaining = download.contentLength.takeIf { it > 0 } ?: (model.sizeBytes - offset)
             val total = offset + remaining
             // Rezerva nad velikost souboru: plný disk v půli stahování je horší než odmítnutí předem.
-            if (modelsDir.usableSpace < remaining + FREE_SPACE_MARGIN) {
+            if (usableSpace(modelsDir) < remaining + FREE_SPACE_MARGIN) {
                 throw NotEnoughSpaceException(remaining + FREE_SPACE_MARGIN)
             }
 
             var written = offset
             var reported = -1L
-            connection.inputStream.use { input ->
-                java.io.FileOutputStream(part, offset > 0).use { output ->
-                    val buffer = ByteArray(BUFFER_BYTES)
-                    while (true) {
-                        ensureActive()
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        written += read
-                        // Hlásí se po megabajtech — každý buffer by zahlcoval UI.
-                        if (written - reported >= REPORT_EVERY_BYTES) {
-                            reported = written
-                            onProgress(ModelDownload(written, total))
-                        }
+            SystemFileSystem.sink(part, append = offset > 0).buffered().use { output ->
+                val buffer = ByteArray(BUFFER_BYTES)
+                while (true) {
+                    ensureActive()
+                    val read = download.read(buffer)
+                    if (read < 0) break
+                    output.write(buffer, 0, read)
+                    written += read
+                    // Hlásí se po megabajtech — každý buffer by zahlcoval UI.
+                    if (written - reported >= REPORT_EVERY_BYTES) {
+                        reported = written
+                        onProgress(ModelDownload(written, total))
                     }
                 }
             }
@@ -761,13 +757,17 @@ class LiteRtOnDeviceAi(
             throw e
         } finally {
             closeOnCancel.dispose()
-            connection.disconnect()
+            download.close()
         }
     }
 
     /** Hotový `.part` přejmenuje na model. Není to chyba sítě, takže ne [IOException]. */
     private fun moveFinished(model: DownloadedModel) {
-        check(model.partFile().renameTo(model.file())) { "Cannot move ${model.partFile().name}" }
+        try {
+            model.partFile().moveTo(model.file())
+        } catch (e: IOException) {
+            throw IllegalStateException("Cannot move ${model.partFile().name}", e)
+        }
     }
 
     private inline fun quietly(block: () -> Unit) {
@@ -821,6 +821,8 @@ class LiteRtOnDeviceAi(
         /** Prodleva před dalším pokusem, násobená počtem pokusů bez pokroku. */
         const val RETRY_DELAY_MS = 2_000L
 
+        const val HTTP_OK = 200
+        const val HTTP_PARTIAL = 206
         const val HTTP_RANGE_NOT_SATISFIABLE = 416
 
         /** Jak dlouho se při plánování čeká na první hlášení sítě; monitor odpovídá hned. */
