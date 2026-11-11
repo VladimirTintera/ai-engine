@@ -10,15 +10,8 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSCachesDirectory
-import platform.Foundation.NSFileManager
-import platform.Foundation.NSNumber
 import platform.Foundation.NSProcessInfo
-import platform.Foundation.NSSearchPathDirectory
-import platform.Foundation.NSURL
-import platform.Foundation.NSURLIsExcludedFromBackupKey
-import platform.Foundation.NSUserDomainMask
 
 /**
  * Stahované modely na iOS ([LiteRtOnDeviceAi]); runtime dodá aplikace ([LinkedLiteRtRuntime]
@@ -31,18 +24,28 @@ import platform.Foundation.NSUserDomainMask
  * - **Paměť**: model se nenabídne pod [DownloadedModel.minMemoryGb]. Aplikace navíc potřebuje
  *   entitlement `com.apple.developer.kernel.increased-memory-limit`, jinak ji systém při načtení
  *   modelu nad zhruba polovinu paměti zabije (README).
- * - **Stahování drží korutina procesu** jako na desktopu, jen v popředí: po uspání aplikace zůstane
- *   `.part` a další stahování naváže. Placenou síť platforma nerozlišuje ([startDownload]).
+ * - **Soubor stahuje systém** sezením `NSURLSession` na pozadí ([IosModelDownloads],
+ *   [BackgroundModelDownloads]): stahování jde dál i v uspané nebo systémem ukončené aplikaci.
+ *   Korutina procesu ([startDownload]) na něj jen čeká a hlásí průběh; po dalším spuštění se
+ *   k běžící úloze připojí ([downloadPending]). Placenou síť platforma nerozlišuje.
  * - **GPU přes Metal** jen na zařízení; simulátor počítá na CPU ([gpu]).
  * - **Obrázky zatím ne** ([png]); zvuk dekodérem od aplikace ([audio]), ale llama.cpp ho stejně
  *   neumí — dává smysl až s LiteRT-LM.
  */
 @OptIn(ExperimentalForeignApi::class)
-class IosLiteRtPlatform(
-    /** Runtime, jejichž továrnu aplikace předává do [LiteRtOnDeviceAi]; modely ostatních se nenabídnou. */
-    private val runtimes: Set<ModelRuntime> = setOf(ModelRuntime.LlamaCpp),
-    private val audio: AudioClipDecoder = NoAudioClips,
+class IosLiteRtPlatform internal constructor(
+    private val runtimes: Set<ModelRuntime>,
+    private val audio: AudioClipDecoder,
+    /** Přenos souboru modelu; v aplikaci sezení na pozadí, v testech obyčejné. */
+    internal val fileDownloader: BackgroundModelDownloads,
+    modelsDir: () -> String,
 ) : LiteRtPlatform {
+
+    constructor(
+        /** Runtime, jejichž továrnu aplikace předává do [LiteRtOnDeviceAi]; modely ostatních se nenabídnou. */
+        runtimes: Set<ModelRuntime> = setOf(ModelRuntime.LlamaCpp),
+        audio: AudioClipDecoder = NoAudioClips,
+    ) : this(runtimes, audio, IosModelDownloads.downloads, { iosModelsDir })
 
     private val logger = Logger.withTag("OnDeviceAi")
 
@@ -50,9 +53,9 @@ class IosLiteRtPlatform(
 
     private val downloads = ConcurrentMap<DownloadedModel, Job>()
 
-    override val modelsDir: String by lazy { directory(NSApplicationSupportDirectory, MODELS_DIR, backup = false) }
+    override val modelsDir: String by lazy(modelsDir)
 
-    override val cacheDir: String by lazy { directory(NSCachesDirectory, CACHE_DIR, backup = true) }
+    override val cacheDir: String by lazy { iosDirectory(NSCachesDirectory, CACHE_DIR, backup = true) }
 
     override fun canRun(model: DownloadedModel): Boolean =
         model.runtime in runtimes &&
@@ -91,25 +94,20 @@ class IosLiteRtPlatform(
         }
     }
 
+    /**
+     * Zastaví korutinu i úlohu sezení na pozadí — ta může běžet i bez korutiny (z minulého spuštění,
+     * dokud se k ní obrazovka nepřipojila). Stažená část zůstane jako resume data.
+     */
     override fun cancelDownload(model: DownloadedModel) {
         downloads.remove(model)?.cancel()
+        scope.launch { fileDownloader.pause(model) }
     }
 
-    override suspend fun downloadPending(model: DownloadedModel): Boolean = downloads[model]?.isActive == true
-
-    private fun directory(base: NSSearchPathDirectory, name: String, backup: Boolean): String {
-        val root = NSFileManager.defaultManager.URLForDirectory(base, NSUserDomainMask, appropriateForURL = null, create = true, error = null)
-            ?: error("No directory $base")
-        val dir = root.URLByAppendingPathComponent(name, isDirectory = true) ?: error("No directory $name")
-        NSFileManager.defaultManager.createDirectoryAtURL(dir, withIntermediateDirectories = true, attributes = null, error = null)
-        if (!backup && !dir.setResourceValue(NSNumber(bool = true), forKey = NSURLIsExcludedFromBackupKey, error = null)) {
-            logger.w { "Adresář modelů se nepodařilo vyřadit ze zálohy" }
-        }
-        return dir.path ?: error("No path for $dir")
-    }
+    /** Běží korutina, nebo úloha sezení na pozadí (i z minulého spuštění aplikace)? */
+    override suspend fun downloadPending(model: DownloadedModel): Boolean =
+        downloads[model]?.isActive == true || fileDownloader.running(model)
 
     private companion object {
-        const val MODELS_DIR = "ai-models"
         const val CACHE_DIR = "ai-cache"
         const val GIB = 1024.0 * 1024 * 1024
 

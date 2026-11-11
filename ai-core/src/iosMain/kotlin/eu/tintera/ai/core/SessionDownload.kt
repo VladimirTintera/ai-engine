@@ -37,9 +37,10 @@ internal actual fun httpDownload(url: String, offset: Long, timeoutMs: Int): Htt
  * - **Sezení na jedno stahování** (ephemeral, bez HTTP keše — ta by gigabajty modelu uložila
  *   podruhé). Drží delegáta, dokud se nezavře, proto [close] vždycky.
  * - **Kanál bez stropu**: zápis na disk je rychlejší než síť, kusy se nehromadí.
- * - **Jen v popředí.** iOS aplikaci v pozadí po chvíli uspí a spojení spadne; `.part` zůstane
- *   a příští stahování naváže. Stahování na pozadí (`backgroundSessionConfiguration`) by chtělo
- *   soubor od systému místo `.part` a obnovu po spuštění aplikace — zatím ne.
+ * - **Jen v popředí a jen pro `.part`.** Modely stahuje sezení na pozadí ([BackgroundModelDownloads]);
+ *   tudy jde jen dotažení `.part` z verze knihovny, která na pozadí nestahovala, a vlastní
+ *   `LiteRtPlatform`. iOS aplikaci v pozadí po chvíli uspí a spojení spadne; `.part` zůstane
+ *   a příští stahování naváže.
  */
 @OptIn(ExperimentalForeignApi::class)
 private class SessionDownload(url: String, offset: Long, timeoutMs: Int) : HttpDownload {
