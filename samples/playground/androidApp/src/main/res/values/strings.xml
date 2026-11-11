@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Playground</string>
+    <!-- Titles of the runtime feature modules (dist:title in their manifests). -->
+    <string name="title_litert">LiteRT-LM runtime</string>
+    <string name="title_llamacpp">llama.cpp runtime</string>
+</resources>

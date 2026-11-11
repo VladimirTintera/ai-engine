@@ -252,6 +252,35 @@ on iOS.
 - Model weights are never bundled, and the library names no models. Each model has its own license,
   which is the concern of the app that offers it; see [NOTICE](NOTICE).
 
+## Playground app
+
+[`samples/playground`](samples/playground) is a small Compose Multiplatform app (Android, desktop,
+iOS; Material 3 Expressive) to download on-device models and try a conversation with them. It is
+also the reference wiring of the library on every platform: a **separate Gradle build** that
+includes this repository with `includeBuild("../..")`, exactly like an app does, so it never runs
+in this build or its CI and is never published.
+
+- **Catalog** of Gemma, EuroLLM, Aya and Qwen variants (size, quantization, runtime, minimum RAM,
+  license), each pinned to a Hugging Face commit, plus **any GGUF / `.litertlm` file from Hugging
+  Face** (repository or link, optional revision; gated repositories are refused with a message).
+  Variants a device cannot run (`.litertlm` on iOS, too little RAM) are shown greyed with the reason.
+- **Model management**: download, pause, resume, delete, "Wi-Fi only" (Android, iOS), the system
+  models (Gemini Nano, Apple Intelligence) where available.
+- **Conversation test**: streamed answer with model load time, time to first token, tokens/s
+  (estimated from runtime chunks) and chars/s, and a Stop button. The history is put into the
+  prompt by the app and the oldest turns are dropped to fit `ModelInfo.tokenLimit`.
+
+```bash
+cd samples/playground
+./gradlew :composeApp:run                       # desktop (Java 21 toolchain)
+./gradlew :androidApp:installWithRuntimes       # Android: app + runtime feature modules (adb install-multiple)
+open iosApp/iosApp.xcodeproj                    # iOS: run the iosApp scheme
+./gradlew :composeApp:jvmTest -Pplayground.e2e=true  # desktop UI end-to-end: downloads Qwen3 0.6B and chats
+```
+
+The playground needs its own `samples/playground/local.properties` (`sdk.dir=…`) or `ANDROID_HOME`,
+and the same SDK, NDK and CMake as the library (the included build configures all its modules).
+
 ## Building
 
 ```bash
