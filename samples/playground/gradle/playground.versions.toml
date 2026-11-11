@@ -10,6 +10,9 @@ material3 = "1.12.0-alpha03"
 ktor = "3.6.1"
 kotlinx-serialization = "1.12.0"
 androidx-activity = "1.13.0"
+# Play Feature Delivery brings an old androidx.fragment transitively; activity-result APIs need 1.3+
+# (lint InvalidFragmentVersionForActivityResult fails the release build otherwise).
+androidx-fragment = "1.9.1"
 
 [libraries]
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
@@ -23,6 +26,7 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidx-fragment" }
 
 [plugins]
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }

@@ -15,6 +15,9 @@ plugins {
 android {
     namespace = "eu.tintera.ai.playground"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    // NDK ořízne ladicí symboly nativních knihoven (llama.cpp 69 → 7,5 MB); bez něj je AGP balí
+    // neořezané („Unable to strip"). Ořez dělá modul, který knihovnu balí.
+    ndkVersion = libs.versions.ndk.get()
 
     defaultConfig {
         applicationId = "eu.tintera.ai.playground"
@@ -25,6 +28,14 @@ android {
         // Stejné architektury jako runtime v součástech (LiteRT-LM a llama.cpp jen arm64 a x86_64);
         // bundle (AAB i univerzální APK) jinak odmítne moduly s různou sadou ABI.
         ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
+    }
+
+    buildTypes {
+        release {
+            // Ukázka se nepublikuje: release (bez ladění, rychlejší UI) podepíše debug klíč, aby šel
+            // nainstalovat do telefonu (`packageReleaseUniversalApk`).
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     dynamicFeatures += setOf(":litertFeature", ":llamacppFeature")
@@ -47,6 +58,7 @@ kotlin {
 dependencies {
     implementation(project(":composeApp"))
     implementation(playground.androidx.activity.compose)
+    implementation(playground.androidx.fragment)
     implementation(libs.play.feature.delivery)
 }
 
