@@ -57,8 +57,8 @@ jobs:
           name: test-reports-jvm-android
           path: '**/build/reports/tests/'
 
-  # iOS: klibs of :ai-core for device and simulator, common tests on the simulator, and the macOS
-  # desktop llama.cpp library (Metal).
+  # iOS: klibs of :ai-core and :ai-llamacpp-ios (llama.cpp built with CMake from the SDK) for device
+  # and simulator, their tests on the simulator, and the macOS desktop llama.cpp library (Metal).
   ios:
     runs-on: macos-latest
     timeout-minutes: 60
@@ -85,6 +85,9 @@ jobs:
           :ai-core:iosArm64MainKlibrary
           :ai-core:iosSimulatorArm64MainKlibrary
           :ai-core:iosSimulatorArm64Test
+          :ai-llamacpp-ios:iosArm64MainKlibrary
+          :ai-llamacpp-ios:linkDebugTestIosArm64
+          :ai-llamacpp-ios:iosSimulatorArm64Test
           :ai-llamacpp-desktop:test
 
       - name: Upload test reports

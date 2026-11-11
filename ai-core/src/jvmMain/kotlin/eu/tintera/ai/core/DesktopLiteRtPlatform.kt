@@ -53,9 +53,9 @@ class DesktopLiteRtPlatform(
 
     private val downloads = ConcurrentHashMap<DownloadedModel, Job>()
 
-    override val modelsDir: File get() = File(localDirectory, MODELS_DIR)
+    override val modelsDir: String get() = File(localDirectory, MODELS_DIR).absolutePath
 
-    override val cacheDir: File get() = File(localDirectory, CACHE_DIR)
+    override val cacheDir: String get() = File(localDirectory, CACHE_DIR).absolutePath
 
     override fun canRun(model: DownloadedModel): Boolean {
         val runtime = when (model.runtime) {

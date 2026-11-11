@@ -7,9 +7,10 @@ import kotlinx.coroutines.flow.Flow
  * stav pro obrazovku a výběr modelu jsou věc vrstvy nad ním (`LiteRtOnDeviceAi` v :ai-core);
  * tady je jen to, co se nad souborem děje uvnitř runtime.
  *
- * Implementace musí mít veřejný konstruktor bez parametrů: aplikace ji vytváří reflexí podle
+ * Implementace na JVM musí mít veřejný konstruktor bez parametrů: aplikace ji vytváří reflexí podle
  * jména ([LITERT_ENGINE_FACTORY]), protože na Androidu leží v modulu, který se doinstaluje
- * z Google Play až na požádání, a základ aplikace na jeho třídy při překladu nevidí.
+ * z Google Play až na požádání, a základ aplikace na jeho třídy při překladu nevidí. Na iOS
+ * reflexe není a runtime je v aplikaci vždycky: továrnu aplikace vytvoří sama a předá ji přímo.
  */
 interface LlmEngineFactory {
 

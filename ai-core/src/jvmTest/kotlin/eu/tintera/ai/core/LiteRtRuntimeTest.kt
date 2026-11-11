@@ -28,8 +28,8 @@ class LiteRtRuntimeTest {
     private val started: MutableList<DownloadedModel> = Collections.synchronizedList(mutableListOf())
 
     private val platform = object : LiteRtPlatform {
-        override val modelsDir = models
-        override val cacheDir = File(root, "ai-cache")
+        override val modelsDir = models.path
+        override val cacheDir = File(root, "ai-cache").path
         override fun canRun(model: DownloadedModel) = true
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()

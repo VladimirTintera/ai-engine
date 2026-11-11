@@ -38,8 +38,8 @@ class LiteRtGpuFallbackTest {
     private val models = File(root, "ai-models").apply { mkdirs() }
 
     private val platform = object : LiteRtPlatform {
-        override val modelsDir = models
-        override val cacheDir = File(root, "ai-cache")
+        override val modelsDir = models.path
+        override val cacheDir = File(root, "ai-cache").path
         override fun canRun(model: DownloadedModel) = true
         override fun gpu(runtime: ModelRuntime) = runtime in gpuRuntimes
         override fun png(path: String, maxSide: Int): ByteArray? = null

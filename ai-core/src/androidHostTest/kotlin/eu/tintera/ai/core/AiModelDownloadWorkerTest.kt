@@ -115,8 +115,8 @@ private class RecordingNotifications : ModelDownloadNotifications {
 }
 
 private class FilesOnlyPlatform(private val root: File) : LiteRtPlatform {
-    override val modelsDir get() = root
-    override val cacheDir get() = root
+    override val modelsDir: String get() = root.path
+    override val cacheDir: String get() = root.path
     override fun canRun(model: DownloadedModel) = true
     override fun png(path: String, maxSide: Int): ByteArray? = null
     override fun wavClips(path: String): List<ByteArray> = emptyList()

@@ -7,19 +7,23 @@ import kotlinx.coroutines.flow.Flow
  * Předá volání tomu runtime, který uživatel zvolil (typ [ModelVariant]).
  *
  * Díky tomu je volba modelu jedna pro CELOU aplikaci: každá funkce jen předá variantu z nastavení
- * a nemusí vědět, že runtime jsou dva. Všechny stahované modely jdou do téhož runtime ([liteRt]);
+ * a nemusí vědět, kolik je runtime. Všechny stahované modely jdou do téhož runtime ([liteRt]);
  * který soubor načíst, mu řekne [ModelVariant.model].
+ *
+ * Na Androidu Gemini Nano a stahované modely; na iOS Apple Intelligence ([apple]) a stahované
+ * modely, Gemini Nano tam je [NoopOnDeviceAi].
  */
 class RoutingOnDeviceAi(
     private val geminiNano: OnDeviceAi,
     private val liteRt: OnDeviceAi,
+    /** `AppleOnDeviceAi` na iOS; jinde Apple Intelligence není a varianta nikam nejde. */
+    private val apple: OnDeviceAi = NoopOnDeviceAi,
 ) : OnDeviceAi {
 
     private fun target(variant: ModelVariant): OnDeviceAi = when (variant) {
         is ModelVariant.GeminiNano -> geminiNano
         is ModelVariant.Downloaded -> liteRt
-        // Apple Intelligence je jen na iOS, kde se směrovač nepoužívá (`AppleOnDeviceAi`).
-        ModelVariant.Apple -> NoopOnDeviceAi
+        ModelVariant.Apple -> apple
     }
 
     private inline fun <T> route(variant: ModelVariant, call: OnDeviceAi.(ModelVariant) -> T): T =

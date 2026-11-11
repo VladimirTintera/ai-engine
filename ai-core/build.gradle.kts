@@ -6,22 +6,25 @@ plugins {
 /**
  * Jazykový model v zařízení bez ohledu na aplikaci: rozhraní `OnDeviceAi` a jeho poskytovatelé —
  * Gemini Nano přes ML Kit GenAI (Android), modely z katalogu aplikace stahované na žádost
- * a počítané přes LiteRT-LM nebo llama.cpp (Android a desktop), Apple Intelligence přes most do
- * Swiftu (iOS). Stahování modelu, jeho stav pro obrazovku a správa enginu jsou tady.
+ * a počítané přes LiteRT-LM nebo llama.cpp (Android, desktop; na iOS zatím llama.cpp), Apple
+ * Intelligence přes most do Swiftu (iOS). Stahování modelu, jeho stav pro obrazovku a správa
+ * enginu jsou tady.
  *
  * **Nic z aplikace**: prompty, volba modelu pro úlohu, nastavení, texty a UI nese aplikace a co
  * od ní knihovna potřebuje (síť, notifikace stahování, dekódování zvuku, adresář modelů), dostane
  * přes rozhraní. Viz README a docs/cs/ai-v-zarizeni.md, „Modul :client:ai-core“ (z doby v Plume).
  *
- * Runtime modelů (:ai-litert, :ai-llamacpp) tu není ani při překladu, jen jejich
- * rozhraní (:ai-engine); na Androidu jsou to součásti z Google Play, které deklaruje
- * aplikace, na desktopu je přibalí vstupní bod.
+ * Runtime modelů (:ai-litert, :ai-llamacpp, :ai-llamacpp-ios) tu není ani při překladu, jen
+ * jejich rozhraní (:ai-engine); na Androidu jsou to součásti z Google Play, které deklaruje
+ * aplikace, na desktopu je přibalí vstupní bod, na iOS je slinkuje framework aplikace.
  */
 kotlin {
     jvmToolchain(17)
 
     compilerOptions {
         optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
+        // `AtomicReference` ve společném kódu (`ConcurrentMap`).
+        optIn.add("kotlin.concurrent.atomics.ExperimentalAtomicApi")
     }
 
     android {
@@ -46,23 +49,25 @@ kotlin {
     applyDefaultHierarchyTemplate()
 
     sourceSets {
-        // Stahované modely (LiteRT-LM, llama.cpp): Android a desktop. Stahování, stav a engine
-        // jsou společné, platforma je za `LiteRtPlatform`.
-        val liteRtMain = create("liteRtMain") {
-            dependsOn(commonMain.get())
-            dependencies {
-                // `LiteRtRuntime.engines()` vrací továrnu z ai-engine.
-                api(project(":ai-engine"))
-            }
-        }
-
+        // Stahované modely (LiteRT-LM, llama.cpp) jsou ve společném kódu: stahování, stav a engine
+        // pro všechny platformy, platforma za `LiteRtPlatform`. Soubory přes kotlinx-io, síť
+        // přes `httpDownload` (actual níž).
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kermit)
+            implementation(libs.kotlinx.io.core)
+            // `LiteRtRuntime.engines()` vrací továrnu z ai-engine.
+            api(project(":ai-engine"))
+        }
+
+        // Co mají Android a desktop společné: HTTP přes `HttpURLConnection`, runtime podle jména
+        // třídy (reflexe), `LinkageError` nativní knihovny.
+        val javaMain = create("javaMain") {
+            dependsOn(commonMain.get())
         }
 
         androidMain {
-            dependsOn(liteRtMain)
+            dependsOn(javaMain)
         }
 
         androidMain.dependencies {
@@ -80,7 +85,7 @@ kotlin {
         }
 
         jvmMain {
-            dependsOn(liteRtMain)
+            dependsOn(javaMain)
         }
 
         commonTest.dependencies {

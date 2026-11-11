@@ -89,7 +89,7 @@ class RoutingOnDeviceAiTest {
         assertEquals(emptyList(), nano.seen)
     }
 
-    /** Apple Intelligence je jen na iOS, kde se směrovač nepoužívá: tady žádný runtime nedostane nic. */
+    /** Bez `apple` (Android, desktop) Apple Intelligence není: žádný runtime nedostane nic. */
     @Test
     fun appleSeNikamNeposila() = runTest {
         val nano = Recorder(OnDeviceAiStatus.Ready)
@@ -99,6 +99,22 @@ class RoutingOnDeviceAiTest {
 
         assertEquals(emptyList(), nano.seen)
         assertEquals(emptyList(), liteRt.seen)
+    }
+
+    /** Na iOS jde Apple Intelligence svému runtime a stahované modely dál do runtime stahovaných modelů. */
+    @Test
+    fun naIosJdeAppleSvemuRuntime() = runTest {
+        val nano = Recorder(OnDeviceAiStatus.Unsupported)
+        val liteRt = Recorder(OnDeviceAiStatus.Ready)
+        val apple = Recorder(OnDeviceAiStatus.Ready)
+        val ai = RoutingOnDeviceAi(nano, liteRt, apple)
+
+        assertEquals(OnDeviceAiStatus.Ready, ai.status(ModelVariant.Apple))
+        assertEquals(OnDeviceAiStatus.Ready, ai.status(testModel().variant))
+
+        assertEquals(listOf<ModelVariant>(ModelVariant.Apple), apple.seen)
+        assertEquals(listOf(testModel().variant), liteRt.seen)
+        assertEquals(emptyList(), nano.seen)
     }
 
     @Test

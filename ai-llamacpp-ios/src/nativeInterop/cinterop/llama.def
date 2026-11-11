@@ -1,0 +1,9 @@
+# Jádro mostu k llama.cpp (ai-llamacpp/src/main/cpp/ai_engine_llama.h). Statickou knihovnu
+# s jádrem, llama.cpp a ggml postaví úloha `buildLlamaCpp<Target>` a cinterop ji vloží do klibu,
+# takže ji framework aplikace slinkuje sám; aplikace nic dalšího nepřidává.
+headers = ai_engine_llama.h
+headerFilter = ai_engine_llama.h
+package = eu.tintera.ai.llamacpp.native
+staticLibraries = libai_engine_llama_ios.a
+# Metal (GPU), Accelerate (BLAS v ggml) a C++ runtime jádra a llama.cpp.
+linkerOpts = -framework Foundation -framework Metal -framework MetalKit -framework Accelerate -lc++

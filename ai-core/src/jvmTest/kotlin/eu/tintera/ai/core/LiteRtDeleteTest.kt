@@ -15,8 +15,8 @@ class LiteRtDeleteTest {
     private val cache = File(root, "ai-cache").apply { mkdirs() }
 
     private val platform = object : LiteRtPlatform {
-        override val modelsDir = models
-        override val cacheDir = cache
+        override val modelsDir = models.path
+        override val cacheDir = cache.path
         override fun canRun(model: DownloadedModel) = true
         override fun png(path: String, maxSide: Int): ByteArray? = null
         override fun wavClips(path: String): List<ByteArray> = emptyList()

@@ -505,7 +505,7 @@ a **Qwen3 0,6B** (328 MB, 4 GB) pro telefony, na které Gemma nestačí.
 ## Desktop
 
 Gemma a Qwen běží i na desktopu (Windows x64, macOS arm64, Linux), stejným runtime jako na
-Androidu (`liteRtMain` v `:client:ai-core`, `LiteRtPlatform`); co je jinak (Java 21, nativní knihovna jen pro systém
+Androidu (`liteRtMain` v `:client:ai-core`, dnes `commonMain` v `:ai-core`, `LiteRtPlatform`); co je jinak (Java 21, nativní knihovna jen pro systém
 balíčku, modely mimo Roaming, stahování v procesu), je v `docs/poznatky/desktop.md`, „Model
 v zařízení (LiteRT-LM)". Gemini Nano a Apple tam nejsou.
 
@@ -823,6 +823,50 @@ iOS, aplikace ho jen používá.
   `availability: available`, ale `ModelManagerError` 1026, protože Apple Intelligence je na
   Macu vypnutá. **Skutečné generování (a čeština) neověřené** — Apple Intelligence češtinu
   v seznamu jazyků nemá a česká konverzace může skončit `UnsupportedLanguage`.
+
+## Stahované modely na iOS (llama.cpp)
+
+Na iOS jde vedle Apple Intelligence i stažený model GGUF přes llama.cpp (`:ai-llamacpp-ios`).
+LiteRT-LM na iOS zatím ne: má jen Swift API ve stavu „early preview" a šel by jen přes Swift most
+jako Apple (zvlášť pro každou aplikaci).
+
+- **Celá vrstva stahovaných modelů je společný kód** (`commonMain` v `:ai-core`, dřív `liteRtMain`
+  jen pro Android a desktop). Soubory přes kotlinx-io (jeho `IOException` je na JVM
+  `java.io.IOException`, takže se chování nezměnilo), síť za `httpDownload`: `HttpURLConnection`
+  na JVM, `NSURLSession` s delegátem na iOS. `ConcurrentHashMap` nahradila malá `ConcurrentMap`
+  nad `AtomicReference`. `LiteRtPlatform.modelsDir` a `cacheDir` jsou proto řetězce (absolutní
+  cesty), ne `File`.
+- **Jedno jádro mostu pro všechny platformy.** `ai_engine_llama.cpp` má C API
+  (`ai_engine_llama.h`); JNI je tenká vrstva nad ním (`ai_engine_llama_jni.cpp`), iOS ho volá
+  přes cinterop. Šablona promptu, UTF-8 po tokenech i vypnutí GPU jsou tak na iOS stejné.
+- **Statická knihovna z téhož CMakeLists** (`CMAKE_SYSTEM_NAME=iOS`): úloha
+  `buildLlamaCpp<Target>` slije jádro, llama a části ggml do `libai_engine_llama_ios.a` (`libtool`)
+  a cinterop ji vloží do klibu (`staticLibraries` v `llama.def`) — framework aplikace ji slinkuje
+  sám i s frameworky Metal, Accelerate a `libc++`. Nejnižší iOS 15.0 jako Kotlin/Native, jinak
+  linker hlásí knihovnu pro novější systém.
+- **Metal jen na zařízení**, simulátor CPU (`IosLiteRtPlatform.gpu`, v CMake podle sysrootu).
+  Bez Metalu v buildu `LlamaCppEngineFactory.open` s GPU vyhodí dřív, než začne načítat.
+- **Runtime aplikace předá přímo** (`LinkedLiteRtRuntime { LlamaCppEngineFactory() }`): reflexe
+  v Kotlin/Native není a doinstalovat nejde nic. Model jiného runtime `IosLiteRtPlatform.canRun`
+  nenabídne.
+- **Adresář modelů vyřazený ze zálohy** (`NSURLIsExcludedFromBackupKey`, `Application Support/
+  ai-models`): gigabajty, které jde stáhnout znovu, do iCloudu nepatří a App Review to hlídá.
+  Volné místo podle `NSURLVolumeAvailableCapacityForImportantUsageKey` (systém kvůli stahování
+  uklidí i keše jiných aplikací).
+- **Stahování jen v popředí.** Korutina procesu jako na desktopu; po uspání aplikace spojení spadne,
+  `.part` zůstane a další stahování naváže. Stahování na pozadí (`backgroundSessionConfiguration`)
+  by chtělo soubor od systému místo `.part` a obnovu po spuštění — zatím ne. Volba „jen přes
+  Wi-Fi" se na iOS přechází jako na desktopu.
+- **Paměť**: nad zhruba polovinu paměti zařízení aplikaci jetsam při načítání zabije, pokud nemá
+  entitlement `com.apple.developer.kernel.increased-memory-limit`.
+- **Směrovač** má volitelné `apple`: na iOS `RoutingOnDeviceAi(NoopOnDeviceAi, liteRt, apple)`.
+- **Ověřeno v simulátoru (iOS 26.5)**: stahování přes `NSURLSession` proti lokálnímu serveru
+  (čisté, navázání `Range`, server bez rozsahů, 416 s celým `.part`, 403, zrušení za 2 ms);
+  `stories260K.gguf` načtený a odpovídající přes `LlamaCppEngineFactory` i přes celý
+  `LiteRtOnDeviceAi` + `IosLiteRtPlatform` (stav, generování, smazání, vyřazení ze zálohy).
+  Binárka pro zařízení se slinkuje i s Metalem. **Na iPhonu neověřené nic** (Metal, rychlost,
+  paměť, skutečný model).
+
 ## Přepis řeči (zvukový vstup Gemmy)
 
 Gemma 4 umí zvuk (`OnDeviceAi.transcribe`); podrobně v `prohlizec-medii.md`, „Přepis v telefonu".
