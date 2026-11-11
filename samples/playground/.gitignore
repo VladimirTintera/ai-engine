@@ -1,0 +1,12 @@
+.gradle
+.kotlin
+**/build/
+local.properties
+/.idea
+*.iml
+
+# Xcode
+iosApp/**/xcuserdata/
+iosApp/**/*.xcworkspace/xcuserdata/
+iosApp/build/
+DerivedData/

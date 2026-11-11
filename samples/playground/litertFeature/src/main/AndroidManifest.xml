@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:dist="http://schemas.android.com/apk/distribution">
+
+    <!-- On demand from Google Play (PlayLiteRtRuntime installs it together with the first model).
+         Outside Play install it together with the app: ./gradlew :androidApp:installWithRuntimes -->
+    <dist:module dist:title="@string/title_litert">
+        <dist:delivery>
+            <dist:on-demand />
+        </dist:delivery>
+        <dist:fusing dist:include="true" />
+    </dist:module>
+
+    <application android:hasCode="true" />
+</manifest>
