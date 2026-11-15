@@ -36,6 +36,9 @@ class Storage(dataDir: String) {
     private fun load(): Stored = runCatching {
         if (!SystemFileSystem.exists(file)) return Stored()
         json.decodeFromString(Stored.serializer(), SystemFileSystem.source(file).buffered().use { it.readString() })
+            // Vlastní model uložený před tím, než knihovna chtěla hash: bez něj by se stažený soubor nikdy
+            // nenačetl, uživatel ho přidá znovu.
+            .let { stored -> stored.copy(customModels = stored.customModels.filter { it.sha256.isNotEmpty() }) }
     }.getOrDefault(Stored())
 
     private companion object {
@@ -59,6 +62,8 @@ data class CustomModel(
     val minMemoryGb: Int,
     val runtime: ModelRuntime,
     val license: String? = null,
+    /** `lfs.oid` souboru z API Hugging Face; prázdný jen u modelu uloženého starší verzí. */
+    val sha256: String = "",
 ) {
     /** Stálé id; v souboru je i repozitář, aby se dva stejně pojmenované soubory nepotkaly. */
     val id: String get() = "custom:$repo/$file@${commit.take(12)}"
@@ -75,6 +80,7 @@ data class CustomModel(
                 // je jiný model a nesmí přepsat ten první.
                 fileName = "${repo.replace('/', '_')}_${commit.take(7)}_${file.replace('/', '_')}",
                 sizeBytes = sizeBytes,
+                sha256 = sha256,
                 minMemoryGb = minMemoryGb,
                 runtime = runtime,
             ),

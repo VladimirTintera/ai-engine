@@ -58,6 +58,7 @@ class BackgroundModelDownloadsTest {
     private val model = testModel(runtime = ModelRuntime.LlamaCpp).copy(
         url = server.url,
         sizeBytes = content.size.toLong(),
+        sha256 = content.sha256Hex(),
         minMemoryGb = 1,
     )
     private val file = Path(dir, model.fileName)

@@ -1,6 +1,9 @@
 package eu.tintera.ai.core
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.io.IOException
+import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 
@@ -29,6 +32,37 @@ internal fun Path.listNames(): List<String> =
 internal fun Path.moveTo(target: Path) {
     SystemFileSystem.atomicMove(this, target)
 }
+
+/** Čas poslední změny souboru v milisekundách od 1970; 0, když neexistuje. kotlinx-io ho neumí. */
+internal expect fun Path.lastModified(): Long
+
+/** Průběžný výpočet SHA-256 knihovnou platformy (`MessageDigest`, CommonCrypto). */
+internal interface Sha256 {
+    fun update(bytes: ByteArray, count: Int)
+
+    /** Hash malými hexa číslicemi; pak už se nepoužívá. */
+    fun hex(): String
+}
+
+internal expect fun sha256Digest(): Sha256
+
+/** SHA-256 souboru malými hexa číslicemi. Gigabajty trvají sekundy, proto jde zrušit. */
+internal suspend fun Path.sha256(): String {
+    val context = currentCoroutineContext()
+    val digest = sha256Digest()
+    SystemFileSystem.source(this).buffered().use { input ->
+        val buffer = ByteArray(HASH_BUFFER_BYTES)
+        while (true) {
+            context.ensureActive()
+            val read = input.readAtMostTo(buffer)
+            if (read < 0) break
+            digest.update(buffer, read)
+        }
+    }
+    return digest.hex()
+}
+
+private const val HASH_BUFFER_BYTES = 256 * 1024
 
 /**
  * Kolik bajtů smí aplikace v adresáři [dir] ještě zapsat. Na iOS to, co systém uvolní pro

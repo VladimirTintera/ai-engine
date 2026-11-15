@@ -72,11 +72,15 @@ private class SessionDownload(url: String, offset: Long, timeoutMs: Int) : HttpD
     override var contentLength: Long = -1
         private set
 
+    override var contentRange: String? = null
+        private set
+
     override suspend fun connect(): Int {
         task.resume()
         val http = response.await()
         // NSURLResponseUnknownLength je -1, stejně jako u `HttpURLConnection`.
         contentLength = http.expectedContentLength
+        contentRange = http.valueForHTTPHeaderField("Content-Range")
         return http.statusCode.toInt()
     }
 

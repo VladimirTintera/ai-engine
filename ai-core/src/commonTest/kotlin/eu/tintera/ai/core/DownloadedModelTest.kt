@@ -33,7 +33,7 @@ class DownloadedModelTest {
 
     @Test
     fun vychoziKontextAJenText() {
-        val model = DownloadedModel("id", "Model", "https://example.invalid/m", "m", 1, 1, ModelRuntime.LlamaCpp)
+        val model = DownloadedModel("id", "Model", "https://example.invalid/m", "m", 1, "00", 1, ModelRuntime.LlamaCpp)
         assertEquals(8_192, model.contextTokens)
         assertEquals(false, model.multimodal)
     }

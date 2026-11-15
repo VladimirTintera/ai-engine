@@ -88,6 +88,8 @@ val SmallModel = DownloadedModel(
     url = huggingFaceUrl(repo = "some-org/some-model", commit = "<commit sha>", file = "model.litertlm"),
     fileName = "model.litertlm",
     sizeBytes = 343_490_560,
+    // From the file page on Hugging Face ("SHA256"); a file with another hash is never loaded.
+    sha256 = "<sha256 of the file>",
     minMemoryGb = 4, // not offered on devices with less memory
     runtime = ModelRuntime.LiteRt, // or ModelRuntime.LlamaCpp for GGUF files
     contextTokens = 4_096, // default 8,192, which is also the library's ceiling

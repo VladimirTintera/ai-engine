@@ -20,6 +20,9 @@ internal interface HttpDownload : AutoCloseable {
     /** Délka těla odpovědi v bajtech; -1, když ji server neřekl. Až po [connect]. */
     val contentLength: Long
 
+    /** Hlavička `Content-Range` odpovědi (`bytes 100-999/1000`); `null`, když ji server neposlal. Až po [connect]. */
+    val contentRange: String?
+
     /** Přečte další kus těla do [buffer]; vrací počet bajtů, -1 na konci. Výpadek = [IOException]. */
     suspend fun read(buffer: ByteArray): Int
 

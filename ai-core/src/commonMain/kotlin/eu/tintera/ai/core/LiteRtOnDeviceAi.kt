@@ -35,6 +35,8 @@ import kotlinx.io.IOException
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import kotlinx.io.readString
+import kotlinx.io.writeString
 
 /**
  * Modely, které si stáhne a spravuje aplikace sama, přes LiteRT-LM, nebo llama.cpp. Který soubor,
@@ -51,10 +53,13 @@ import kotlinx.io.files.SystemFileSystem
  *   dává [LiteRtRuntime]: na desktopu přibalený, na Androidu součást z Google Play, která se
  *   doinstaluje SPOLU s modelem ([download]), na iOS slinkovaný v aplikaci. Model je připravený,
  *   až když je tu obojí.
- * - **Stahuje se do `.part` a přejmenovává až hotový.** Přítomnost výsledného souboru tedy
- *   znamená „kompletní model" a nic dalšího se kontrolovat nemusí. Přerušené stahování
- *   navazuje (`Range`) — u gigabajtů by začínat od nuly bylo nepoužitelné — a po výpadku
- *   sítě naváže samo, když se připojení vrátí ([fetch]).
+ * - **Stahuje se do `.part` a přejmenovává až hotový a ověřený** ([DownloadedModel.sha256]).
+ *   Soubor jde do nativního parseru v našem procesu, takže podvržený objekt na CDN nebo `.part`
+ *   slepený ze špatných rozsahů se do něj dostat nesmí. Přerušené stahování navazuje (`Range`)
+ *   — u gigabajtů by začínat od nuly bylo nepoužitelné — a po výpadku sítě naváže samo, když se
+ *   připojení vrátí ([fetch]). Soubor, který kontrolou při stažení neprošel (stažený starší
+ *   verzí, na pozadí bez čekající korutiny, obnovený ze zálohy, přenesený z jiného zařízení),
+ *   se ověří před prvním načtením ([ensureVerified]).
  * - **Stahování drží naživu platforma** ([LiteRtPlatform.startDownload]): na Androidu úloha
  *   WorkManageru, která přežije i zabití procesu a naváže na `.part`, na desktopu a iOS korutina
  *   procesu. Tahle třída drží jen stav pro obrazovku ([downloads]) a stahuje v [runDownload].
@@ -107,6 +112,15 @@ class LiteRtOnDeviceAi(
     private fun runtimeOf(model: DownloadedModel): LiteRtRuntime = runtimes(model.runtime)
     private fun DownloadedModel.file() = Path(modelsDir, fileName)
     private fun DownloadedModel.partFile() = Path(modelsDir, "$fileName.part")
+
+    /** Značka, že soubor modelu prošel kontrolou hashe; nese jeho otisk ([fingerprint]). */
+    private fun DownloadedModel.verifiedFile() = Path(modelsDir, "$fileName.verified")
+
+    /**
+     * Otisk souboru modelu: hash z katalogu, délka a čas změny. Soubor se po přejmenování už
+     * nemění, takže jiný otisk znamená jiný soubor (obnova ze zálohy, přenos, nová verze v katalogu).
+     */
+    private fun DownloadedModel.fingerprint(): String = file().let { "$sha256 ${it.size()} ${it.lastModified()}" }
 
     /** Přenos souboru po svém (iOS: sezení na pozadí); `null` = společný přes [httpDownload] do `.part`. */
     private val fileDownloader: ModelFileDownloader? = modelFileDownloader(platform)
@@ -545,16 +559,19 @@ class LiteRtOnDeviceAi(
         engineLock.withLock {
             if (loaded?.model == model) unloadLocked()
         }
-        withContext(Dispatchers.IO) {
-            model.file().delete()
-            model.partFile().delete()
-            // Zkompilovaná keš modelu: skoro tak velká jako model a s ním k ničemu. Leží v keši
-            // platformy, kterou engine dostává, a ze sond bez `cacheDir` i vedle modelu.
-            listOf(Path(platform.cacheDir), modelsDir).forEach { dir ->
-                dir.listNames().filter { model.ownsCacheFile(it) }.forEach { Path(dir, it).delete() }
-            }
-        }
+        withContext(Dispatchers.IO) { deleteFiles(model) }
         logger.i { "Model smazán (${model.displayName})" }
+    }
+
+    private fun deleteFiles(model: DownloadedModel) {
+        model.file().delete()
+        model.partFile().delete()
+        model.verifiedFile().delete()
+        // Zkompilovaná keš modelu: skoro tak velká jako model a s ním k ničemu. Leží v keši
+        // platformy, kterou engine dostává, a ze sond bez `cacheDir` i vedle modelu.
+        listOf(Path(platform.cacheDir), modelsDir).forEach { dir ->
+            dir.listNames().filter { model.ownsCacheFile(it) }.forEach { Path(dir, it).delete() }
+        }
     }
 
     /**
@@ -620,7 +637,41 @@ class LiteRtOnDeviceAi(
         val withVision = vision || current?.vision == true
         unloadLocked()
         if (!model.file().exists()) throw IOException("Model ${model.displayName} is not downloaded")
+        try {
+            ensureVerified(model)
+        } catch (e: ModelIntegrityException) {
+            // Soubor je smazaný a model zase k stažení; chyba modelu (Crashlytics) to není.
+            throw OnDeviceAiException(AiFailureReason.Unavailable, model.variant, cause = e)
+        }
         return createEngine(model, withAudio, withVision, cpuOnly).also { loaded = it }
+    }
+
+    /**
+     * Ověří soubor modelu před načtením, ale hash počítá jen u souboru, který kontrolou ještě
+     * neprošel ([verifiedFile]). Ověřený pozná levně podle otisku ([fingerprint]); hash gigabajtů
+     * při každém načtení by ho zdržel o sekundy. Nesedí-li, soubor se smaže i s keší a model se
+     * dá stáhnout znovu ([OnDeviceAiStatus.Downloadable]).
+     */
+    private suspend fun ensureVerified(model: DownloadedModel) = withContext(Dispatchers.IO) {
+        val marker = runCatching { SystemFileSystem.source(model.verifiedFile()).buffered().use { it.readString() } }.getOrNull()
+        if (marker == model.fingerprint()) return@withContext
+        verify(model, model.file())?.let { problem ->
+            deleteFiles(model)
+            logger.w { "Soubor modelu ${model.displayName} nesedí s katalogem ($problem), smazaný" }
+            throw ModelIntegrityException(model, problem)
+        }
+        markVerified(model)
+        logger.i { "Soubor modelu ověřený (${model.displayName})" }
+    }
+
+    /** Co na [file] nesedí s katalogem (velikost, hash); `null`, když nic. */
+    private suspend fun verify(model: DownloadedModel, file: Path): String? = when {
+        file.size() != model.sizeBytes -> "size ${file.size()} B"
+        else -> file.sha256().takeUnless { it.equals(model.sha256, ignoreCase = true) }?.let { "SHA-256 $it" }
+    }
+
+    private fun markVerified(model: DownloadedModel) {
+        SystemFileSystem.sink(model.verifiedFile()).buffered().use { it.writeString(model.fingerprint()) }
     }
 
     private fun unloadLocked() {
@@ -687,16 +738,28 @@ class LiteRtOnDeviceAi(
      * ani nedostatek místa se čekáním nespraví. Pokusů bez jediného nového bajtu je nejvýš
      * [MAX_RETRIES_WITHOUT_PROGRESS] — server, který spojení pokaždé shodí, jinak nekončí.
      *
+     * Soubor, který nesedí s katalogem ([ModelIntegrityException]), se smaže a stahuje znovu od
+     * začátku, ale jen [MAX_INTEGRITY_RESTARTS]×: navázání na rozsah, který k souboru nepatřil,
+     * stažení načisto spraví, špatný soubor na serveru ne a další gigabajty by dopadly stejně.
+     *
      * Selhání se tu NELOGUJE, loguje ho volající ([OnDeviceAiSettingsViewModel]), který ho
      * dostane i od Gemini Nano. Ve dvou místech by v logu bylo dvakrát.
      */
     private suspend fun fetch(model: DownloadedModel, state: MutableStateFlow<DownloadState>) {
         var failures = 0
+        var restarts = 0
         while (true) {
             val before = model.downloadedBytes()
             try {
                 fetchFile(model) { progress -> state.value = DownloadState.Running(progress) }
                 break
+            } catch (e: ModelIntegrityException) {
+                // Proudy jsou tu už zavřené, takže `.part` jde smazat i na Windows.
+                model.partFile().delete()
+                if (++restarts > MAX_INTEGRITY_RESTARTS) throw e
+                logger.w { "Stažený soubor nesedí (${e.message}), stahuji ho znovu od začátku" }
+                failures = 0
+                state.value = DownloadState.Running(ModelDownload(0, model.sizeBytes, wifiOnly = wifiOnly(model)))
             } catch (e: HttpStatusException) {
                 throw e
             } catch (e: IOException) {
@@ -715,12 +778,18 @@ class LiteRtOnDeviceAi(
     }
 
     /**
-     * Stáhne soubor do `.part` s navázáním na to, co už je staženo, a hotový přejmenuje.
+     * Stáhne soubor do `.part` s navázáním na to, co už je staženo, a hotový ověří a přejmenuje
+     * ([finishDownload]).
      *
      * Hugging Face přesměrovává na CDN; HTTP klient platformy ([httpDownload]) přesměrování
      * následuje sám a hlavičku `Range` přenese. Server, který rozsah nevezme (200 místo 206), dostane
      * soubor od začátku. **401/403 znamená model za souhlasem s licencí** — to knihovna neumí
      * (chtělo by to přihlášení k Hugging Face) a hlásí se jako obyčejné selhání.
+     *
+     * Serveru se věří jen tolik, kolik jde ověřit proti katalogu: 206 musí začínat přesně tam,
+     * odkud se navazuje (jinak by se do `.part` slepily kusy, které k sobě nepatří), délka musí
+     * sedět s [DownloadedModel.sizeBytes] a víc bajtů se nezapíše — server bez `Content-Length`
+     * by jinak mohl zaplnit disk. Co nesedí, je [ModelIntegrityException].
      */
     private suspend fun fetchFile(model: DownloadedModel, onProgress: (ModelDownload) -> Unit) = withContext(Dispatchers.IO) {
         modelsDir.mkdirs()
@@ -740,6 +809,20 @@ class LiteRtOnDeviceAi(
             } finally {
                 platformFetches.remove(model)
             }
+            // Platforma soubor položila rovnou na místo modelu (systém dočasný soubor hned po
+            // předání smaže); ověří se tedy až tam.
+            verify(model, model.file())?.let { problem ->
+                model.file().delete()
+                throw ModelIntegrityException(model, problem)
+            }
+            markVerified(model)
+            return@withContext
+        }
+        // Celý `.part`: proces skončil mezi posledním zápisem a přejmenováním. Delší nechala verze
+        // bez stropu a ten soubor být nemůže; [finishDownload] ho odmítne.
+        if (part.size() >= model.sizeBytes) {
+            finishDownload(model)
+            onProgress(ModelDownload(model.sizeBytes, model.sizeBytes))
             return@withContext
         }
         var offset = part.size()
@@ -754,19 +837,24 @@ class LiteRtOnDeviceAi(
             if (cause is CancellationException) download.close()
         }
         try {
-            val code = download.connect()
-            if (code == HTTP_RANGE_NOT_SATISFIABLE && part.size() == model.sizeBytes) {
-                // `.part` je celý, jen se nestihl přejmenovat (proces zabitý mezi posledním
-                // zápisem a přejmenováním). Bez tohohle by každý další pokus skončil 416.
-                moveFinished(model)
-                onProgress(ModelDownload(model.sizeBytes, model.sizeBytes))
-                return@withContext
+            when (val code = download.connect()) {
+                HTTP_OK -> offset = 0L
+                HTTP_PARTIAL -> {
+                    val range = download.contentRange
+                    if (rangeStart(range, model.sizeBytes) != offset) {
+                        throw ModelIntegrityException(model, "Content-Range '$range' for offset $offset")
+                    }
+                }
+                // Server zná soubor kratší, než je `.part`: z toho se navázat nedá.
+                HTTP_RANGE_NOT_SATISFIABLE -> throw ModelIntegrityException(model, "HTTP 416 for offset $offset")
+                else -> throw HttpStatusException(code, model.displayName)
             }
-            if (code == HTTP_OK) offset = 0L
-            else if (code != HTTP_PARTIAL) throw HttpStatusException(code, model.displayName)
 
-            val remaining = download.contentLength.takeIf { it > 0 } ?: (model.sizeBytes - offset)
-            val total = offset + remaining
+            val remaining = model.sizeBytes - offset
+            val length = download.contentLength
+            if (length >= 0 && length != remaining) {
+                throw ModelIntegrityException(model, "Content-Length $length B, expected $remaining B")
+            }
             // Rezerva nad velikost souboru: plný disk v půli stahování je horší než odmítnutí předem.
             if (usableSpace(modelsDir) < remaining + FREE_SPACE_MARGIN) {
                 throw NotEnoughSpaceException(remaining + FREE_SPACE_MARGIN)
@@ -780,18 +868,21 @@ class LiteRtOnDeviceAi(
                     ensureActive()
                     val read = download.read(buffer)
                     if (read < 0) break
+                    if (read > model.sizeBytes - written) {
+                        throw ModelIntegrityException(model, "more than ${model.sizeBytes} B")
+                    }
                     output.write(buffer, 0, read)
                     written += read
                     // Hlásí se po megabajtech — každý buffer by zahlcoval UI.
                     if (written - reported >= REPORT_EVERY_BYTES) {
                         reported = written
-                        onProgress(ModelDownload(written, total))
+                        onProgress(ModelDownload(written, model.sizeBytes))
                     }
                 }
             }
-            if (written != total) throw IOException("Incomplete download: $written of $total B")
-            moveFinished(model)
-            onProgress(ModelDownload(total, total))
+            if (written != model.sizeBytes) throw IOException("Incomplete download: $written of ${model.sizeBytes} B")
+            finishDownload(model)
+            onProgress(ModelDownload(model.sizeBytes, model.sizeBytes))
         } catch (e: IOException) {
             // Spojení zavřené zrušením není výpadek sítě: nečekat na síť, skončit jako zrušení.
             ensureActive()
@@ -802,13 +893,29 @@ class LiteRtOnDeviceAi(
         }
     }
 
-    /** Hotový `.part` přejmenuje na model. Není to chyba sítě, takže ne [IOException]. */
-    private fun moveFinished(model: DownloadedModel) {
+    /**
+     * Hotový `.part` ověří ([verify]) a přejmenuje na model. Nesedí-li, je to jiný soubor, než
+     * jaký je v katalogu (podvržený na CDN, nebo slepený z rozsahů, které k sobě nepatří) →
+     * [ModelIntegrityException]. Přejmenování, které selže, není chyba sítě, takže ne [IOException].
+     */
+    private suspend fun finishDownload(model: DownloadedModel) {
+        verify(model, model.partFile())?.let { throw ModelIntegrityException(model, it) }
+        model.verifiedFile().delete()
         try {
             model.partFile().moveTo(model.file())
         } catch (e: IOException) {
             throw IllegalStateException("Cannot move ${model.partFile().name}", e)
         }
+        markVerified(model)
+    }
+
+    /**
+     * Začátek rozsahu z `Content-Range` (`bytes 100-999/1000`). `null`, když hlavička chybí, nebo
+     * rozsah nesahá do konce souboru o velikosti [size] — pak to není zbytek našeho souboru.
+     */
+    private fun rangeStart(header: String?, size: Long): Long? {
+        val (start, end, total) = CONTENT_RANGE.matchEntire(header?.trim() ?: return null)?.destructured ?: return null
+        return start.toLongOrNull()?.takeIf { end.toLongOrNull() == size - 1 && total.toLongOrNull() == size }
     }
 
     private inline fun quietly(block: () -> Unit) {
@@ -855,12 +962,17 @@ class LiteRtOnDeviceAi(
         /** Pokusy o navázání, během kterých nepřibyl ani bajt; pak se stahování vzdá. */
         const val MAX_RETRIES_WITHOUT_PROGRESS = 5
 
+        /** Kolikrát se soubor, který nesedí s katalogem, stáhne znovu od začátku, než se to vzdá. */
+        const val MAX_INTEGRITY_RESTARTS = 1
+
         /** Prodleva před dalším pokusem, násobená počtem pokusů bez pokroku. */
         const val RETRY_DELAY_MS = 2_000L
 
         const val HTTP_OK = 200
         const val HTTP_PARTIAL = 206
         const val HTTP_RANGE_NOT_SATISFIABLE = 416
+
+        val CONTENT_RANGE = Regex("""bytes (\d+)-(\d+)/(\d+)""")
 
         /** Jak dlouho se při plánování čeká na první hlášení sítě; monitor odpovídá hned. */
         const val NETWORK_CHECK_MS = 1_000L
@@ -886,6 +998,14 @@ private class LoadedEngine(
     val backend: LlmBackend,
     val engine: LlmEngine,
 )
+
+/**
+ * Soubor modelu nesedí s katalogem ([DownloadedModel.sizeBytes], [DownloadedModel.sha256]), nebo
+ * server při navazování poslal jiný rozsah, než o jaký se žádalo. Soubor se smaže a do runtime
+ * nejde; stahování ho jednou zkusí znovu od začátku (`LiteRtOnDeviceAi.fetch`), načtení ho jen smaže.
+ */
+class ModelIntegrityException(model: DownloadedModel, detail: String) :
+    Exception("${model.displayName} does not match the catalog: $detail")
 
 /**
  * Data se zakázala uprostřed stahování na placené síti ([LiteRtOnDeviceAi.setDownloadNetwork]).

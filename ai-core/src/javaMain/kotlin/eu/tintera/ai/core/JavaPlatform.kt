@@ -6,9 +6,20 @@ import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlinx.io.files.Path
 
 internal actual fun usableSpace(dir: Path): Long = File(dir.toString()).usableSpace
+
+internal actual fun Path.lastModified(): Long = File(toString()).lastModified()
+
+internal actual fun sha256Digest(): Sha256 = object : Sha256 {
+    private val digest = MessageDigest.getInstance("SHA-256")
+
+    override fun update(bytes: ByteArray, count: Int) = digest.update(bytes, 0, count)
+
+    override fun hex(): String = digest.digest().joinToString("") { "%02x".format(it) }
+}
 
 internal actual fun isLinkageError(error: Throwable): Boolean = error is LinkageError
 
@@ -38,6 +49,8 @@ private class UrlConnectionDownload(url: String, offset: Long, timeoutMs: Int) :
     override suspend fun connect(): Int = connection.responseCode
 
     override val contentLength: Long get() = connection.contentLengthLong
+
+    override val contentRange: String? get() = connection.getHeaderField("Content-Range")
 
     override suspend fun read(buffer: ByteArray): Int =
         (input ?: connection.inputStream.also { input = it }).read(buffer)
