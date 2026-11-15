@@ -86,6 +86,7 @@ fun AddModelDialog(playground: Playground, onDismiss: () -> Unit) {
         error = null
         scope.launch {
             try {
+                val sha256 = file.sha256 ?: throw HuggingFace.LookupException("\"${file.path}\" has no SHA-256 on Hugging Face (not in LFS).")
                 val size = playground.huggingFace.checkDownload(found.repo, found.commit, file.path)
                 val sizeBytes = file.sizeBytes.takeIf { it > 0 } ?: size ?: 0L
                 playground.models.addCustom(
@@ -97,6 +98,7 @@ fun AddModelDialog(playground: Playground, onDismiss: () -> Unit) {
                         minMemoryGb = suggestedMinMemoryGb(sizeBytes),
                         runtime = runtime,
                         license = found.license,
+                        sha256 = sha256,
                     ),
                 )
                 onDismiss()

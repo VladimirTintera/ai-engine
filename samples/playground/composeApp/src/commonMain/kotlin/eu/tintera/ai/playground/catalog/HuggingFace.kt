@@ -12,14 +12,14 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Vlastní model z Hugging Face: z repozitáře (a volitelně revize) zjistí commit, soubory modelů
- * a jejich velikost přes `https://huggingface.co/api/models/{repo}/revision/{rev}`, a ověří, že
+ * Vlastní model z Hugging Face: z repozitáře (a volitelně revize) zjistí commit, soubory modelů,
+ * jejich velikost a SHA-256 (knihovna bez něj stažený soubor nenačte) přes `https://huggingface.co/api/models/{repo}/revision/{rev}`, a ověří, že
  * soubor jde stáhnout bez přihlášení — modely za souhlasem s licencí knihovna neumí.
  */
 class HuggingFace(private val http: HttpClient) {
 
-    /** Soubor modelu v repozitáři. */
-    data class ModelFile(val path: String, val sizeBytes: Long)
+    /** Soubor modelu v repozitáři; [sha256] je `null` u souboru mimo LFS (soubor modelu to není). */
+    data class ModelFile(val path: String, val sizeBytes: Long, val sha256: String?)
 
     /** Co o repozitáři víme na zadané revizi. [commit] je plný SHA, na který se adresa pinne. */
     data class Repository(val repo: String, val commit: String, val license: String?, val files: List<ModelFile>)
@@ -50,7 +50,7 @@ class HuggingFace(private val http: HttpClient) {
         }
         val files = info.siblings
             .filter { runtimeForFile(it.rfilename) != null && !it.rfilename.contains("mmproj", ignoreCase = true) }
-            .map { ModelFile(it.rfilename, it.size ?: 0L) }
+            .map { ModelFile(it.rfilename, it.size ?: 0L, it.lfs?.sha256) }
             .sortedBy { it.path }
         return Repository(repo = info.id ?: repo, commit = info.sha, license = info.cardData?.license, files = files)
     }
@@ -86,7 +86,10 @@ class HuggingFace(private val http: HttpClient) {
     private class CardData(val license: String? = null)
 
     @Serializable
-    private class Sibling(val rfilename: String, val size: Long? = null)
+    private class Sibling(val rfilename: String, val size: Long? = null, val lfs: Lfs? = null)
+
+    @Serializable
+    private class Lfs(val sha256: String? = null)
 
     companion object {
         const val BASE = "https://huggingface.co"

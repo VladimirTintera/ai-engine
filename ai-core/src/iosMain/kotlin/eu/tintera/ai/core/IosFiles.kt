@@ -3,9 +3,23 @@
 package eu.tintera.ai.core
 
 import co.touchlab.kermit.Logger
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.free
+import kotlinx.cinterop.nativeHeap
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.usePinned
 import kotlinx.io.files.Path
+import platform.CoreCrypto.CC_SHA256_CTX
+import platform.CoreCrypto.CC_SHA256_DIGEST_LENGTH
+import platform.CoreCrypto.CC_SHA256_Final
+import platform.CoreCrypto.CC_SHA256_Init
+import platform.CoreCrypto.CC_SHA256_Update
 import platform.Foundation.NSApplicationSupportDirectory
+import platform.Foundation.NSDate
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSFileModificationDate
 import platform.Foundation.NSFileSystemFreeSize
 import platform.Foundation.NSNumber
 import platform.Foundation.NSSearchPathDirectory
@@ -13,6 +27,7 @@ import platform.Foundation.NSURL
 import platform.Foundation.NSURLIsExcludedFromBackupKey
 import platform.Foundation.NSURLVolumeAvailableCapacityForImportantUsageKey
 import platform.Foundation.NSUserDomainMask
+import platform.Foundation.timeIntervalSince1970
 
 /**
  * Adresář stažených modelů: `Application Support/ai-models`, vyřazený ze zálohy do iCloudu.
@@ -52,6 +67,28 @@ internal actual fun usableSpace(dir: Path): Long {
         ?.get(NSFileSystemFreeSize)
         .asLong()
         ?: Long.MAX_VALUE
+}
+
+internal actual fun Path.lastModified(): Long {
+    val date = NSFileManager.defaultManager.attributesOfItemAtPath(toString(), error = null)?.get(NSFileModificationDate) as? NSDate
+    return date?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
+}
+
+/** CommonCrypto; kontext žije na nativní haldě, dokud [Sha256.hex] neskončí. */
+internal actual fun sha256Digest(): Sha256 = object : Sha256 {
+    private val context = nativeHeap.alloc<CC_SHA256_CTX>().also { CC_SHA256_Init(it.ptr) }
+
+    override fun update(bytes: ByteArray, count: Int) {
+        if (count == 0) return
+        bytes.usePinned { CC_SHA256_Update(context.ptr, it.addressOf(0), count.convert()) }
+    }
+
+    override fun hex(): String {
+        val hash = UByteArray(CC_SHA256_DIGEST_LENGTH)
+        hash.usePinned { CC_SHA256_Final(it.addressOf(0), context.ptr) }
+        nativeHeap.free(context)
+        return hash.joinToString("") { it.toString(16).padStart(2, '0') }
+    }
 }
 
 /** Kotlin/Native nemá `LinkageError`; chybějící knihovna se na iOS pozná už při linkování. */

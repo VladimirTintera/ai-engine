@@ -16,7 +16,7 @@ import kotlinx.coroutines.runBlocking
 
 /**
  * Stažení souboru modelu ([LiteRtOnDeviceAi.runDownload]) proti lokálnímu serveru: navázání
- * na `.part` hlavičkou `Range`, server bez rozsahů, celý `.part` (416) a chyba serveru. Logika je
+ * na `.part` hlavičkou `Range`, server bez rozsahů, celý `.part` a chyba serveru. Logika je
  * společná pro všechny platformy, tady jede přes `HttpURLConnection`.
  */
 class LiteRtFetchTest {
@@ -59,6 +59,7 @@ class LiteRtFetchTest {
     private val model = testModel().copy(
         url = "http://127.0.0.1:${server.address.port}/model",
         sizeBytes = content.size.toLong(),
+        sha256 = content.sha256Hex(),
     )
     private val file = File(models, model.fileName)
     private val part = File(models, "${model.fileName}.part")

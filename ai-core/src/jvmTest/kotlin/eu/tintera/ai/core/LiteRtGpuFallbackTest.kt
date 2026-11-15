@@ -57,7 +57,7 @@ class LiteRtGpuFallbackTest {
     private val ai = LiteRtOnDeviceAi(platform, { FakeLiteRtRuntime(engines = engines) }, AlwaysOnline)
 
     init {
-        listOf(other, litert, gguf).forEach { File(models, it.fileName).writeText("x") }
+        listOf(other, litert, gguf).forEach { File(models, it.fileName).writeBytes(TEST_MODEL_BYTES) }
     }
 
     @AfterTest

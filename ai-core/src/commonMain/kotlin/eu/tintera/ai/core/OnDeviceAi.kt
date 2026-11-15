@@ -173,7 +173,10 @@ enum class ModelRuntime {
  * @property url odkud se soubor stáhne. **Má mířit na pevnou verzi**, ať se stahuje pořád tentýž
  *   soubor, i když autor nahraje novější ([huggingFaceUrl]).
  * @property fileName jméno souboru v adresáři modelů a začátek jmen jeho keší ([ownsCacheFile]).
- * @property sizeBytes velikost souboru; kolik se bude stahovat, než to řekne server.
+ * @property sizeBytes velikost souboru. Víc se nestáhne, i kdyby server posílal dál.
+ * @property sha256 SHA-256 souboru, hexa číslicemi (Hugging Face ho u souboru v LFS ukazuje jako
+ *   „SHA256", v API `lfs.oid`). Soubor s jiným hashem se do runtime nedostane: nativní parser
+ *   modelu běží v procesu aplikace a podvržený nebo poškozený soubor by v něm skončil.
  * @property minMemoryGb pod touhle pamětí se model nenabízí, protože by systém aplikaci při načítání
  *   zabil (`LiteRtPlatform.canRun`).
  * @property runtime čím se soubor počítá.
@@ -187,6 +190,7 @@ data class DownloadedModel(
     val url: String,
     val fileName: String,
     val sizeBytes: Long,
+    val sha256: String,
     val minMemoryGb: Int,
     val runtime: ModelRuntime,
     val contextTokens: Int = 8_192,

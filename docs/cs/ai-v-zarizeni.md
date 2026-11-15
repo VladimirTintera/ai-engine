@@ -107,8 +107,15 @@ poskytovatelích nemusí vědět nic.
 - **Uložená volba, kterou zařízení nesplní, se opraví** (`supportedModels`, testy
   `SupportedModelsTest`): Nano na telefonu bez AICore → Gemma, výchozí Nano na iOS → Apple,
   E4B s málo pamětí → E2B. Z víc zapnutých se jen vypustí ten, který tu není.
-- **Stahuje se do `.part` a přejmenovává až hotový**, takže přítomnost souboru = kompletní model.
-  Přerušené stahování navazuje (`Range`). Před stahováním se kontroluje volné místo (velikost
+- **Stahuje se do `.part` a přejmenovává až hotový a ověřený**: velikost a SHA-256 z katalogu
+  (`DownloadedModel.sha256`). Soubor jde do nativního parseru v procesu aplikace, takže podvržený
+  objekt na CDN se do něj dostat nesmí. Nesedící soubor se smaže a stáhne jednou znovu od začátku,
+  pak stahování selže (`ModelIntegrityException`). Soubor, který na iOS položí sezení na pozadí, se
+  ověří stejně. 206 se bere, jen když `Content-Range` začíná na offsetu navázání, a víc než
+  `sizeBytes` se nezapíše. Soubor, který kontrolou při stažení neprošel (starší verze knihovny,
+  stažení na pozadí, na které nikdo nečekal, obnova ze zálohy, přenos na nové zařízení), se před
+  prvním načtením jednou zahashuje a nesedí-li, smaže se; značka `<soubor>.verified` s délkou
+  a časem změny pak hash při dalších načteních ušetří. Přerušené stahování navazuje (`Range`). Před stahováním se kontroluje volné místo (velikost
   + 500 MB) a nedostatek má vlastní hlášku (`NotEnoughSpaceException`) — u gigabajtů je to
   nejčastější důvod selhání a jediný, se kterým uživatel může něco udělat.
 - **Po výpadku sítě stahování naváže SAMO** (`LiteRtOnDeviceAi.fetch` čeká na `Connectivity`, v Plume

@@ -44,7 +44,7 @@ private val CcByNc4 = License("CC BY-NC 4.0", "https://creativecommons.org/licen
 
 /**
  * Varianta z Hugging Face. [commit] pinuje soubor (stahuje se pořád tentýž, i když autor nahraje
- * novější), [sizeBytes] je skutečná velikost souboru z API Hugging Face. Všechny soubory níž jdou
+ * novější), [sizeBytes] je skutečná velikost souboru a [sha256] jeho `lfs.oid` z API Hugging Face. Všechny soubory níž jdou
  * stáhnout bez přihlášení (ověřeno 2026-11-11: `resolve` vrací 302, ne 401/403); modely za
  * souhlasem s licencí knihovna stáhnout neumí.
  *
@@ -60,6 +60,7 @@ private fun hf(
     file: String,
     sizeBytes: Long,
     minMemoryGb: Int,
+    sha256: String,
     contextTokens: Int = 8_192,
 ): CatalogVariant {
     val runtime = runtimeForFile(file) ?: error("Unknown model format: $file")
@@ -72,6 +73,7 @@ private fun hf(
             url = huggingFaceUrl(repo, commit, file),
             fileName = file,
             sizeBytes = sizeBytes,
+            sha256 = sha256,
             minMemoryGb = minMemoryGb,
             runtime = runtime,
             contextTokens = contextTokens,
@@ -107,9 +109,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = GemmaTerms,
                 variants = listOf(
                     hf("gemma3-1b-q4km", "Gemma 3 1B", "Q4_K_M", "unsloth/gemma-3-1b-it-GGUF",
-                        "f0b45be0aac41bd6a100a4b5734cad5f67255bfb", "gemma-3-1b-it-Q4_K_M.gguf", 806_058_272, 3),
+                        "f0b45be0aac41bd6a100a4b5734cad5f67255bfb", "gemma-3-1b-it-Q4_K_M.gguf", 806_058_272, 3,
+                        sha256 = "8270790f3ab69fdfe860b7b64008d9a19986d8df7e407bb018184caa08798ebd"),
                     hf("gemma3-1b-q8", "Gemma 3 1B", "Q8_0", "unsloth/gemma-3-1b-it-GGUF",
-                        "f0b45be0aac41bd6a100a4b5734cad5f67255bfb", "gemma-3-1b-it-Q8_0.gguf", 1_069_306_400, 4),
+                        "f0b45be0aac41bd6a100a4b5734cad5f67255bfb", "gemma-3-1b-it-Q8_0.gguf", 1_069_306_400, 4,
+                        sha256 = "616dfb049ad14288d971d96f5ca4953fdebbf1e3cd407ad159f3bfd47090201d"),
                 ),
             ),
             CatalogModel(
@@ -117,9 +121,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("gemma4-e2b-q4km", "Gemma 4 E2B", "Q4_K_M", "unsloth/gemma-4-E2B-it-GGUF",
-                        "0314792d7f1f7e229411f620751375812bb9faf2", "gemma-4-E2B-it-Q4_K_M.gguf", 3_106_738_272, 8),
+                        "0314792d7f1f7e229411f620751375812bb9faf2", "gemma-4-E2B-it-Q4_K_M.gguf", 3_106_738_272, 8,
+                        sha256 = "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"),
                     hf("gemma4-e2b-litertlm", "Gemma 4 E2B", "LiteRT-LM", "litert-community/gemma-4-E2B-it-litert-lm",
-                        "5b472bf479ec0e944b01c214b46fec082b3e8c01", "gemma-4-E2B-it.litertlm", 2_588_147_712, 6),
+                        "5b472bf479ec0e944b01c214b46fec082b3e8c01", "gemma-4-E2B-it.litertlm", 2_588_147_712, 6,
+                        sha256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"),
                 ),
             ),
             CatalogModel(
@@ -127,9 +133,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("gemma4-e4b-q4km", "Gemma 4 E4B", "Q4_K_M", "unsloth/gemma-4-E4B-it-GGUF",
-                        "bfc15c382204943c3a8fff0c750b94ae2364d7a3", "gemma-4-E4B-it-Q4_K_M.gguf", 4_977_171_584, 12),
+                        "bfc15c382204943c3a8fff0c750b94ae2364d7a3", "gemma-4-E4B-it-Q4_K_M.gguf", 4_977_171_584, 12,
+                        sha256 = "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"),
                     hf("gemma4-e4b-litertlm", "Gemma 4 E4B", "LiteRT-LM", "litert-community/gemma-4-E4B-it-litert-lm",
-                        "e75b1386809cda8e0fda1ef93a39f75b70d400b9", "gemma-4-E4B-it.litertlm", 3_659_530_240, 8),
+                        "e75b1386809cda8e0fda1ef93a39f75b70d400b9", "gemma-4-E4B-it.litertlm", 3_659_530_240, 8,
+                        sha256 = "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0"),
                 ),
             ),
         ),
@@ -146,10 +154,12 @@ val Catalog: List<ModelFamily> = listOf(
                     // Kontext souboru je jen 4 096 tokenů (max_position_embeddings).
                     hf("eurollm-1.7b-q4km", "EuroLLM 1.7B", "Q4_K_M", "mradermacher/EuroLLM-1.7B-Instruct-GGUF",
                         "2951f08f66429c934c8b01a94347161362430808", "EuroLLM-1.7B-Instruct.Q4_K_M.gguf", 1_045_157_088, 4,
-                        contextTokens = 4_096),
+                        contextTokens = 4_096,
+                        sha256 = "1cade17f491ea46a686dbee51fbd52442e0f001f102380c3b9d66b4a77f84093"),
                     hf("eurollm-1.7b-q8", "EuroLLM 1.7B", "Q8_0", "mradermacher/EuroLLM-1.7B-Instruct-GGUF",
                         "2951f08f66429c934c8b01a94347161362430808", "EuroLLM-1.7B-Instruct.Q8_0.gguf", 1_763_775_712, 6,
-                        contextTokens = 4_096),
+                        contextTokens = 4_096,
+                        sha256 = "2a8567f5247eb288dd7cd19efe541fa1c34f9a689ba7ed2974264499255b73f0"),
                 ),
             ),
             CatalogModel(
@@ -157,7 +167,8 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("eurollm-9b-2512-q4km", "EuroLLM 9B", "Q4_K_M", "mradermacher/EuroLLM-9B-Instruct-2512-GGUF",
-                        "5138603fccb9dc1f35c25cfd1a4981a78617e9ff", "EuroLLM-9B-Instruct-2512.Q4_K_M.gguf", 5_582_838_912, 12),
+                        "5138603fccb9dc1f35c25cfd1a4981a78617e9ff", "EuroLLM-9B-Instruct-2512.Q4_K_M.gguf", 5_582_838_912, 12,
+                        sha256 = "fe9b50d4ba67eb0131f1ceeaab2e56ea8fb6b2bbc37391d3219c791c3b140a28"),
                 ),
             ),
         ),
@@ -172,9 +183,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = CcByNc4,
                 variants = listOf(
                     hf("tiny-aya-global-q4km", "Tiny Aya Global", "Q4_K_M", "CohereLabs/tiny-aya-global-GGUF",
-                        "a602ea7eeec3a4ad6f77a1b8cf6a53512824922b", "tiny-aya-global-q4_k_m.gguf", 2_143_977_056, 6),
+                        "a602ea7eeec3a4ad6f77a1b8cf6a53512824922b", "tiny-aya-global-q4_k_m.gguf", 2_143_977_056, 6,
+                        sha256 = "d01d995272af305b2b843efcff8a10cf9869cf53e764cb72b0e91b777484570a"),
                     hf("tiny-aya-global-q8", "Tiny Aya Global", "Q8_0", "CohereLabs/tiny-aya-global-GGUF",
-                        "a602ea7eeec3a4ad6f77a1b8cf6a53512824922b", "tiny-aya-global-q8_0.gguf", 3_570_654_816, 8),
+                        "a602ea7eeec3a4ad6f77a1b8cf6a53512824922b", "tiny-aya-global-q8_0.gguf", 3_570_654_816, 8,
+                        sha256 = "947713a2710e23fc80aa860a04d46131d5cf8bbb73e164edb5d8d30e2d14f795"),
                 ),
             ),
             CatalogModel(
@@ -182,7 +195,8 @@ val Catalog: List<ModelFamily> = listOf(
                 license = CcByNc4,
                 variants = listOf(
                     hf("aya-expanse-8b-q4km", "Aya Expanse 8B", "Q4_K_M", "bartowski/aya-expanse-8b-GGUF",
-                        "f9d62ed0c58e6f2ae17975df990b1b8a4013b596", "aya-expanse-8b-Q4_K_M.gguf", 5_056_982_720, 12),
+                        "f9d62ed0c58e6f2ae17975df990b1b8a4013b596", "aya-expanse-8b-Q4_K_M.gguf", 5_056_982_720, 12,
+                        sha256 = "9592bad943fe56cf93200286a0a4b00a158cd84a408f227b9978ec5879002fb8"),
                 ),
             ),
         ),
@@ -197,13 +211,16 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3-0.6b-q4km", "Qwen3 0.6B", "Q4_K_M", "unsloth/Qwen3-0.6B-GGUF",
-                        "50968a4468ef4233ed78cd7c3de230dd1d61a56b", "Qwen3-0.6B-Q4_K_M.gguf", 396_705_472, 2),
+                        "50968a4468ef4233ed78cd7c3de230dd1d61a56b", "Qwen3-0.6B-Q4_K_M.gguf", 396_705_472, 2,
+                        sha256 = "ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a"),
                     hf("qwen3-0.6b-q8", "Qwen3 0.6B", "Q8_0", "Qwen/Qwen3-0.6B-GGUF",
-                        "23749fefcc72300e3a2ad315e1317431b06b590a", "Qwen3-0.6B-Q8_0.gguf", 639_446_688, 3),
+                        "23749fefcc72300e3a2ad315e1317431b06b590a", "Qwen3-0.6B-Q8_0.gguf", 639_446_688, 3,
+                        sha256 = "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"),
                     // Statický model s KV keší 4 096 (LiteRT-LM to hlásí při načtení).
                     hf("qwen3-0.6b-litertlm", "Qwen3 0.6B", "LiteRT-LM", "litert-community/Qwen3-0.6B",
                         "8768ea43e6d801ee0d353e5036007e6790a2ba05", "Qwen3-0.6B.litertlm", 613_722_264, 3,
-                        contextTokens = 4_096),
+                        contextTokens = 4_096,
+                        sha256 = "c5f39b4191926786c3e6668b62af4d6eb15248dfc7a5348252a9b406f33f2108"),
                 ),
             ),
             CatalogModel(
@@ -211,9 +228,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3-1.7b-q4km", "Qwen3 1.7B", "Q4_K_M", "unsloth/Qwen3-1.7B-GGUF",
-                        "d7f544eead698dbd1f15126ef60b45a1e1933222", "Qwen3-1.7B-Q4_K_M.gguf", 1_107_409_472, 4),
+                        "d7f544eead698dbd1f15126ef60b45a1e1933222", "Qwen3-1.7B-Q4_K_M.gguf", 1_107_409_472, 4,
+                        sha256 = "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"),
                     hf("qwen3-1.7b-q8", "Qwen3 1.7B", "Q8_0", "Qwen/Qwen3-1.7B-GGUF",
-                        "90862c4b9d2787eaed51d12237eafdfe7c5f6077", "Qwen3-1.7B-Q8_0.gguf", 1_834_426_016, 6),
+                        "90862c4b9d2787eaed51d12237eafdfe7c5f6077", "Qwen3-1.7B-Q8_0.gguf", 1_834_426_016, 6,
+                        sha256 = "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a"),
                 ),
             ),
             CatalogModel(
@@ -221,7 +240,8 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3-4b-q4km", "Qwen3 4B", "Q4_K_M", "Qwen/Qwen3-4B-GGUF",
-                        "bc640142c66e1fdd12af0bd68f40445458f3869b", "Qwen3-4B-Q4_K_M.gguf", 2_497_280_256, 6),
+                        "bc640142c66e1fdd12af0bd68f40445458f3869b", "Qwen3-4B-Q4_K_M.gguf", 2_497_280_256, 6,
+                        sha256 = "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"),
                 ),
             ),
             CatalogModel(
@@ -229,7 +249,8 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3-8b-q4km", "Qwen3 8B", "Q4_K_M", "Qwen/Qwen3-8B-GGUF",
-                        "7c41481f57cb95916b40956ab2f0b139b296d974", "Qwen3-8B-Q4_K_M.gguf", 5_027_783_488, 12),
+                        "7c41481f57cb95916b40956ab2f0b139b296d974", "Qwen3-8B-Q4_K_M.gguf", 5_027_783_488, 12,
+                        sha256 = "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"),
                 ),
             ),
             CatalogModel(
@@ -237,9 +258,11 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3.5-0.8b-q4km", "Qwen3.5 0.8B", "Q4_K_M", "unsloth/Qwen3.5-0.8B-GGUF",
-                        "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0", "Qwen3.5-0.8B-Q4_K_M.gguf", 532_517_120, 3),
+                        "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0", "Qwen3.5-0.8B-Q4_K_M.gguf", 532_517_120, 3,
+                        sha256 = "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"),
                     hf("qwen3.5-0.8b-litertlm", "Qwen3.5 0.8B", "LiteRT-LM int8", "litert-community/Qwen3.5-0.8B",
-                        "658b849e745b6ba2a0e4b52a3a23e2a3892221e7", "Qwen3.5-0.8B_int8.litertlm", 964_657_152, 4),
+                        "658b849e745b6ba2a0e4b52a3a23e2a3892221e7", "Qwen3.5-0.8B_int8.litertlm", 964_657_152, 4,
+                        sha256 = "d6702088983b3a997db5299558a37d2fd924a94daf2b09bd42c4e618c6f694a4"),
                 ),
             ),
             CatalogModel(
@@ -247,7 +270,8 @@ val Catalog: List<ModelFamily> = listOf(
                 license = Apache2,
                 variants = listOf(
                     hf("qwen3.5-2b-q4km", "Qwen3.5 2B", "Q4_K_M", "unsloth/Qwen3.5-2B-GGUF",
-                        "f6d5376be1edb4d416d56da11e5397a961aca8ae", "Qwen3.5-2B-Q4_K_M.gguf", 1_280_835_840, 4),
+                        "f6d5376be1edb4d416d56da11e5397a961aca8ae", "Qwen3.5-2B-Q4_K_M.gguf", 1_280_835_840, 4,
+                        sha256 = "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"),
                 ),
             ),
         ),
